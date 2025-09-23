@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+import atexit
 import math
 import os
 import subprocess
 import sys
-from typing import Sequence
 import tempfile
 import timeit
 from dataclasses import dataclass
@@ -35,11 +35,11 @@ BENCHMARK_RESULTS_PRINTED = False
 SKIPPED_BENCHMARKS: set[tuple[str, str]] = set()
 
 
-LARGE_SCALE_LABELS = ("x1000", "x1e6", "x1e9")
-BILLION_SCALE_LABEL = "x1e9"
-BILLION_ENV_VAR = "RUN_BILLION_SCALE"
-BILLION_SCALE_REASON = (
-    "requires enabling RUN_BILLION_SCALE=1 and significant CPU/RAM/disk resources"
+LARGE_SCALE_LABELS = ("x1000", "x1e6", "LARGEST")
+LARGEST_SCALE_LABEL = "LARGEST"
+LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
+LARGEST_SCALE_REASON = (
+    "requires enabling RUN_LARGEST_SCALE=1 and significant CPU/RAM/disk resources"
 )
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
 
@@ -72,16 +72,18 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
-    if scale_label != BILLION_SCALE_LABEL:
+    if scale_label != LARGEST_SCALE_LABEL:
         return True
-    value = os.environ.get(BILLION_ENV_VAR, "").strip().lower()
+    value = os.environ.get(LARGEST_ENV_VAR, "").strip().lower()
+    if not value:
+        return True
     return value in {"1", "true", "yes", "on"}
 
 
 def _ensure_scale_enabled(scale_label: str) -> None:
     if not _is_scale_enabled(scale_label):
         raise RuntimeError(
-            f"Scale '{scale_label}' is disabled. {BILLION_SCALE_REASON}."
+            f"Scale '{scale_label}' is disabled. {LARGEST_SCALE_REASON}."
         )
 
 
@@ -174,12 +176,10 @@ def _initialize_haplotype_large(
             start_col = pop_index * n_samples_per_pop
             stop_col = start_col + n_samples_per_pop
             probs = pop_freqs[:, pop_index, :]
-            for row_idx in range(size):
-                chunk[row_idx, start_col:stop_col] = rng.choice(
-                    allele_values,
-                    size=n_samples_per_pop,
-                    p=probs[row_idx],
-                )
+            cdf = np.cumsum(probs, axis=-1)
+            random_values = rng.random((size, n_samples_per_pop, 1))
+            indices = np.sum(random_values > cdf[:, None, :-1], axis=-1)
+            chunk[:, start_col:stop_col] = allele_values[indices]
         missing_mask = rng.random((size, total_samples)) < 0.01
         if np.any(missing_mask):
             chunk[missing_mask] = -1
@@ -229,16 +229,16 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     configs = {
         "x1000": (200, 100, 1000),
         "x1e6": (4000, 5000, 1_000_000),
-        # The "x1e9" dataset is deliberately sized to remain practical on CI while
-        # still being markedly larger than the 10^6 scale.
-        "x1e9": (20_000, 5_000, None),
+        # The "LARGEST" dataset targets 10x the 10^6 scale size while remaining
+        # practical for CI execution.
+        LARGEST_SCALE_LABEL: (40_000, 5_000, None),
     }
 
     if scale_label not in configs:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == BILLION_SCALE_LABEL:
+    if scale_label == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_WEIR_VARIANTS * BASE_WEIR_SAMPLES
@@ -250,14 +250,14 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     else:
         smaller_scale_total = configs["x1e6"][0] * configs["x1e6"][1]
         if simulated_total <= smaller_scale_total:
-            raise AssertionError("Billion-scale dataset must exceed million-scale size")
+            raise AssertionError("Largest-scale dataset must exceed million-scale size")
 
     ploidy = 2
     subpops = _build_even_subpops(n_samples, n_subpops=2)
 
-    if scale_label == "x1e9":
+    if scale_label == LARGEST_SCALE_LABEL:
         g = _load_or_create_memmap(
-            name="weir_genotypes_x1e9",
+            name="weir_genotypes_largest",
             shape=(n_variants, n_samples, ploidy),
             dtype=np.int8,
             initializer=lambda mm: _initialize_weir_large(mm, seed=424242),
@@ -299,15 +299,15 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     configs = {
         "x1000": (100, None, 1000),
         "x1e6": (5000, None, 1_000_000),
-        # Keep the "x1e9" haplotype data tractable while remaining the largest scale.
-        "x1e9": (20_000, 3000, None),
+        # Keep the "LARGEST" haplotype data tractable while remaining the biggest scale.
+        LARGEST_SCALE_LABEL: (60_000, 3000, None),
     }
 
     if scale_label not in configs:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_samples_per_pop, explicit_variants, required_factor = configs[scale_label]
-    if scale_label == BILLION_SCALE_LABEL:
+    if scale_label == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_variants = BASE_HAP_VARIANTS + (1 if include_missing_row else 0)
@@ -321,17 +321,17 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         n_variants_total = required_total // total_samples
     else:
         if explicit_variants is None:
-            raise AssertionError("Explicit variant count required for billion scale")
+            raise AssertionError("Explicit variant count required for largest scale")
         n_variants_total = explicit_variants
         smaller_required_total = base_total * configs["x1e6"][2]
         if n_variants_total * total_samples <= smaller_required_total:
-            raise AssertionError("Billion-scale haplotypes must exceed million-scale size")
+            raise AssertionError("Largest-scale haplotypes must exceed million-scale size")
 
-    if scale_label == "x1e9":
+    if scale_label == LARGEST_SCALE_LABEL:
         dtype = np.int8
         shape = (n_variants_total, total_samples)
         haplotypes = _load_or_create_memmap(
-            name="haplotypes_x1e9",
+            name="haplotypes_largest",
             shape=shape,
             dtype=dtype,
             initializer=lambda mm: _initialize_haplotype_large(
@@ -385,15 +385,15 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     configs = {
         "x1000": (360, 50, 1000),
         "x1e6": (6000, 3000, 1_000_000),
-        # Keep the billion scale practical while still much larger than 10^6.
-        "x1e9": (20_000, 5_000, None),
+        # Keep the largest scale practical while still much larger than 10^6.
+        LARGEST_SCALE_LABEL: (36_000, 5_000, None),
     }
 
     if scale_label not in configs:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == BILLION_SCALE_LABEL:
+    if scale_label == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_SEQDIVERSITY_VARIANTS * BASE_SEQDIVERSITY_SAMPLES
@@ -407,13 +407,13 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     else:
         smaller_scale_total = configs["x1e6"][0] * configs["x1e6"][1]
         if simulated_total <= smaller_scale_total:
-            raise AssertionError("Billion-scale sequence data must exceed million scale")
+            raise AssertionError("Largest-scale sequence data must exceed million scale")
 
     ploidy = 2
 
-    if scale_label == "x1e9":
+    if scale_label == LARGEST_SCALE_LABEL:
         genotype = _load_or_create_memmap(
-            name="sequence_genotypes_x1e9",
+            name="sequence_genotypes_largest",
             shape=(n_variants, n_samples, ploidy),
             dtype=np.int8,
             initializer=lambda mm: _initialize_sequence_large(mm, seed=2025),
@@ -449,15 +449,15 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     configs = {
         "x1000": (120, 100, 1000),
         "x1e6": (4000, 3000, 1_000_000),
-        # Choose a billion-scale matrix that is still solvable via SVD on CI.
-        "x1e9": (6000, 4000, None),
+        # Choose a largest-scale matrix that is still solvable via SVD on CI.
+        LARGEST_SCALE_LABEL: (30_000, 4_000, None),
     }
 
     if scale_label not in configs:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == BILLION_SCALE_LABEL:
+    if scale_label == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_PCA_VARIANTS * BASE_PCA_SAMPLES
@@ -469,11 +469,11 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     else:
         smaller_total = configs["x1e6"][0] * configs["x1e6"][1]
         if simulated_total <= smaller_total:
-            raise AssertionError("Billion-scale PCA matrix must exceed million scale")
+            raise AssertionError("Largest-scale PCA matrix must exceed million scale")
 
-    if scale_label == "x1e9":
+    if scale_label == LARGEST_SCALE_LABEL:
         matrix = _load_or_create_memmap(
-            name="pca_matrix_x1e9",
+            name="pca_matrix_largest",
             shape=(n_variants, n_samples),
             dtype=np.float32,
             initializer=lambda mm: _initialize_pca_large(mm, seed=707),
@@ -681,13 +681,26 @@ def _print_benchmarks() -> None:
 
     BENCHMARK_RESULTS_PRINTED = True
     print("\nBenchmark results (best of single run):")
-    for record in sorted(BENCHMARK_RESULTS, key=lambda r: (r.category, r.size_label)):
+    size_order = {label: index for index, label in enumerate(LARGE_SCALE_LABELS)}
+    size_order["original"] = -1
+
+    def _sort_key(record: BenchmarkRecord) -> tuple[str, int, str]:
+        return (
+            record.category,
+            size_order.get(record.size_label, len(size_order)),
+            record.size_label,
+        )
+
+    for record in sorted(BENCHMARK_RESULTS, key=_sort_key):
         if record.skipped:
             detail = f" ({record.details})" if record.details else ""
             print(f"{record.category} [{record.size_label}]: skipped{detail}")
             continue
         detail = f" ({record.details})" if record.details else ""
         print(f"{record.category} [{record.size_label}]: {record.seconds:.6f}s{detail}")
+
+
+atexit.register(_print_benchmarks)
 
 
 def _build_weir_cockerham_inputs():
@@ -786,7 +799,7 @@ def test_weir_cockerham_fst_components():
             _record_benchmark_skip(
                 "allel.weir_cockerham_fst",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         g_large, subpops_large = _simulate_weir_genotypes(label)
@@ -837,7 +850,7 @@ def test_weir_cockerham_fst_variants_and_overall():
             _record_benchmark_skip(
                 "allel.weir_cockerham_fst",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         a_large, b_large, c_large = _weir_results_cached(label)
@@ -906,7 +919,7 @@ def test_hudson_fst_examples():
             _record_benchmark_skip(
                 "allel.hudson_fst",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         num_large, den_large = _hudson_results_cached(label)
@@ -939,7 +952,7 @@ def test_mean_pairwise_difference():
             _record_benchmark_skip(
                 "allel.mean_pairwise_difference",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         mpd_large = _mean_pairwise_difference_cached(label)
@@ -993,12 +1006,12 @@ def test_sequence_diversity_and_watterson_theta():
             _record_benchmark_skip(
                 "allel.sequence_diversity",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             _record_benchmark_skip(
                 "allel.watterson_theta",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         pi_large, theta_large = _sequence_diversity_cached(label)
@@ -1055,12 +1068,12 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
             _record_benchmark_skip(
                 "allel.mean_pairwise_difference_between",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             _record_benchmark_skip(
                 "allel.sequence_divergence",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         mpd_between_large = _mean_pairwise_difference_between_cached(label)
@@ -1134,7 +1147,7 @@ def test_pca_example():
             _record_benchmark_skip(
                 "allel.pca",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         coords_large, model_large = _pca_results_cached(label)
@@ -1173,7 +1186,7 @@ def test_randomized_pca_example():
             _record_benchmark_skip(
                 "allel.randomized_pca",
                 label,
-                BILLION_SCALE_REASON,
+                LARGEST_SCALE_REASON,
             )
             continue
         coords_large, model_large = _randomized_pca_results_cached(label)
@@ -1187,14 +1200,8 @@ def main() -> int:
 
     import pytest  # type: ignore
 
-    return pytest.main([__file__])
-    exit_code = pytest.main([__file__])
-
-    module = sys.modules.get("docs_examples")
-    if module is not None and hasattr(module, "_print_benchmarks"):
-        module._print_benchmarks()
-    else:
-        _print_benchmarks()
+    exit_code = pytest.main(["-s", __file__])
+    _print_benchmarks()
     return exit_code
 
 
