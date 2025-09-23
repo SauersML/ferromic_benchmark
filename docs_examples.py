@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 import sys
+from typing import Sequence
 import tempfile
 import timeit
 from dataclasses import dataclass
@@ -743,6 +744,8 @@ def test_weir_cockerham_fst_components():
     import numpy as np
     import allel
 
+    g, subpops = _build_weir_cockerham_inputs()
+    a, b, c = allel.weir_cockerham_fst(g, subpops)
     g, _ = _build_weir_cockerham_inputs()
     a, b, c = _weir_original_results_cached()
 
@@ -802,6 +805,8 @@ def test_weir_cockerham_fst_variants_and_overall():
     import numpy as np
     import allel
 
+    g, subpops = _build_weir_cockerham_inputs()
+    a, b, c = allel.weir_cockerham_fst(g, subpops)
     a, b, c = _weir_original_results_cached()
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -873,6 +878,7 @@ def test_hudson_fst_examples():
     ac1 = g.count_alleles(subpop=subpops[0])
     ac2 = g.count_alleles(subpop=subpops[1])
 
+    num, den = allel.hudson_fst(ac1, ac2)
     details = f"{ac1.shape[0]}x{ac1.shape[1]}"
     num, den = benchmark_call(
         "allel.hudson_fst",
@@ -917,6 +923,7 @@ def test_mean_pairwise_difference():
 
     h, _ = _build_haplotype_array()
     ac = h.count_alleles()
+    mpd = allel.mean_pairwise_difference(ac)
     details = f"{ac.shape[0]}x{ac.shape[1]}"
     mpd = benchmark_call(
         "allel.mean_pairwise_difference",
@@ -962,6 +969,7 @@ def test_sequence_diversity_and_watterson_theta():
     ac = g.count_alleles()
     pos = np.array([2, 4, 7, 14, 15, 18, 19, 25, 27])
 
+    pi = allel.sequence_diversity(pos, ac, start=1, stop=31)
     details = f"{ac.shape[0]}x{ac.shape[1]}"
     pi = benchmark_call(
         "allel.sequence_diversity",
@@ -971,6 +979,7 @@ def test_sequence_diversity_and_watterson_theta():
     )
     np.testing.assert_allclose(pi, 0.13978494623655915, rtol=0, atol=1e-12)
 
+    theta_hat_w = allel.watterson_theta(pos, ac, start=1, stop=31)
     theta_hat_w = benchmark_call(
         "allel.watterson_theta",
         "original",
@@ -1005,6 +1014,7 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
     ac1 = h.count_alleles(subpop=[0, 1])
     ac2 = h.count_alleles(subpop=[2, 3])
 
+    mpd_between = allel.mean_pairwise_difference_between(ac1, ac2)
     details = f"{ac1.shape[0]}x{ac1.shape[1]}"
     mpd_between = benchmark_call(
         "allel.mean_pairwise_difference_between",
@@ -1031,6 +1041,7 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
     ac1_div = h_div.count_alleles(subpop=[0, 1])
     ac2_div = h_div.count_alleles(subpop=[2, 3])
 
+    dxy = allel.sequence_divergence(pos, ac1_div, ac2_div, start=1, stop=31)
     dxy = benchmark_call(
         "allel.sequence_divergence",
         "original",
@@ -1098,6 +1109,7 @@ def test_pca_example():
     import allel
 
     gn = _build_pca_input()
+    coords, model = allel.pca(gn, n_components=2)
     coords, model = benchmark_call(
         "allel.pca",
         "original",
@@ -1136,6 +1148,7 @@ def test_randomized_pca_example():
     import allel
 
     gn = _build_pca_input()
+    coords, model = allel.randomized_pca(gn, n_components=2, random_state=0)
     coords, model = benchmark_call(
         "allel.randomized_pca",
         "original",
@@ -1174,6 +1187,7 @@ def main() -> int:
 
     import pytest  # type: ignore
 
+    return pytest.main([__file__])
     exit_code = pytest.main([__file__])
 
     module = sys.modules.get("docs_examples")
@@ -1190,4 +1204,3 @@ def pytest_sessionfinish(session, exitstatus):  # type: ignore[unused-argument]
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
