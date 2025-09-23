@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      RUN_BILLION_SCALE: "1"
+      RUN_LARGEST_SCALE: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
