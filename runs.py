@@ -298,8 +298,9 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     configs = {
         "x1000": (200, 100, 1000),
         "x1e6": (4000, 5000, 1_000_000),
-        # Expand the "LARGEST" dataset 1000x via roughly balanced variant/sample growth.
-        LARGEST_SCALE_LABEL: (1_318_400, 181_250, None),
+        # Keep the "LARGEST" dataset dramatically larger than the million-scale run
+        # while staying inside the CI disk limits (~44M diploid genotypes ≈ 0.08 GiB).
+        LARGEST_SCALE_LABEL: (5_500, 8_000, None),
 
 
     }
@@ -369,8 +370,9 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     configs = {
         "x1000": (100, None, 1000),
         "x1e6": (5000, None, 1_000_000),
-        # Grow the "LARGEST" haplotype data 1000x with balanced sample and variant scaling.
-        LARGEST_SCALE_LABEL: (1_945_600, 131_250, None),
+        # Scale the "LARGEST" haplotype data well past the million-scale scenario
+        # while remaining within CI storage budgets (~73M haplotypes ≈ 0.07 GiB).
+        LARGEST_SCALE_LABEL: (5_500, 6_656, None),
 
 
     }
@@ -457,8 +459,9 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     configs = {
         "x1000": (360, 50, 1000),
         "x1e6": (6000, 3000, 1_000_000),
-        # Expand the "LARGEST" sequence dataset 1000x with balanced sample and variant growth.
-        LARGEST_SCALE_LABEL: (1_162_500, 185_600, None),
+        # Expand the "LARGEST" sequence dataset far beyond the million-scale baseline
+        # without recreating the original disk usage issue (~44M diploid calls ≈ 0.08 GiB).
+        LARGEST_SCALE_LABEL: (8_000, 5_500, None),
 
     }
 
@@ -522,8 +525,9 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     configs = {
         "x1000": (120, 100, 1000),
         "x1e6": (4000, 3000, 1_000_000),
-        # Increase the "LARGEST" PCA matrix 10x with more even variant and sample growth.
-        LARGEST_SCALE_LABEL: (93_750, 12_800, None),
+        # Increase the "LARGEST" PCA matrix substantially beyond the million-scale case
+        # while keeping the generated matrix manageable for CI runners (~44M floats ≈ 0.17 GiB).
+        LARGEST_SCALE_LABEL: (8_000, 5_500, None),
 
     }
 
