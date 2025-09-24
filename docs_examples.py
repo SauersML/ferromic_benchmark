@@ -218,6 +218,7 @@ def _initialize_haplotype_large(
             alpha = base_weights * divergence[:, pop_index][:, None]
             alpha = np.clip(alpha + mutational_bias, 0.2, None)
             probs = _sample_dirichlet(alpha)
+
             cdf = np.cumsum(probs, axis=-1)
             random_values = rng.random((size, n_samples_per_pop, 1))
             indices = np.sum(random_values > cdf[:, None, :-1], axis=-1)
@@ -227,6 +228,7 @@ def _initialize_haplotype_large(
             migrants = rng.integers(0, max_allele, size=np.count_nonzero(migration_mask), dtype=np.int8)
             chunk[migration_mask] = migrants
         missing_mask = rng.random((size, total_samples)) < 0.012
+
         if np.any(missing_mask):
             chunk[missing_mask] = -1
 
@@ -302,6 +304,7 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         # The "LARGEST" dataset targets 10x the 10^6 scale size while remaining
         # practical for CI execution.
         LARGEST_SCALE_LABEL: (41_200, 5_800, None),
+
     }
 
     if scale_label not in configs:
@@ -371,6 +374,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         "x1e6": (5000, None, 1_000_000),
         # Keep the "LARGEST" haplotype data tractable while remaining the biggest scale.
         LARGEST_SCALE_LABEL: (60_800, 4_200, None),
+
     }
 
     if scale_label not in configs:
@@ -457,6 +461,7 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
         "x1e6": (6000, 3000, 1_000_000),
         # Keep the largest scale practical while still much larger than 10^6.
         LARGEST_SCALE_LABEL: (37_200, 5_800, None),
+
     }
 
     if scale_label not in configs:
