@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Execute scikit-allel documentation examples via pytest assertions."""
-
 from __future__ import annotations
 
 import atexit
@@ -304,6 +301,7 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         # Expand the "LARGEST" dataset 1000x via roughly balanced variant/sample growth.
         LARGEST_SCALE_LABEL: (1_318_400, 181_250, None),
 
+
     }
 
     if scale_label not in configs:
@@ -373,6 +371,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         "x1e6": (5000, None, 1_000_000),
         # Grow the "LARGEST" haplotype data 1000x with balanced sample and variant scaling.
         LARGEST_SCALE_LABEL: (1_945_600, 131_250, None),
+
 
     }
 
@@ -525,6 +524,7 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
         "x1e6": (4000, 3000, 1_000_000),
         # Increase the "LARGEST" PCA matrix 10x with more even variant and sample growth.
         LARGEST_SCALE_LABEL: (93_750, 12_800, None),
+
     }
 
     if scale_label not in configs:
