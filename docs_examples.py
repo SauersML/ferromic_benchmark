@@ -301,9 +301,8 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     configs = {
         "x1000": (200, 100, 1000),
         "x1e6": (4000, 5000, 1_000_000),
-        # The "LARGEST" dataset targets 10x the 10^6 scale size while remaining
-        # practical for CI execution.
-        LARGEST_SCALE_LABEL: (41_200, 5_800, None),
+        # Scale the "LARGEST" dataset to substantially exceed other sizes.
+        LARGEST_SCALE_LABEL: (41_200_000, 5_800, None),
 
     }
 
@@ -372,8 +371,8 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     configs = {
         "x1000": (100, None, 1000),
         "x1e6": (5000, None, 1_000_000),
-        # Keep the "LARGEST" haplotype data tractable while remaining the biggest scale.
-        LARGEST_SCALE_LABEL: (60_800, 4_200, None),
+        # Dramatically expand the "LARGEST" haplotype data volume.
+        LARGEST_SCALE_LABEL: (60_800, 4_200_000, None),
 
     }
 
@@ -459,8 +458,8 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     configs = {
         "x1000": (360, 50, 1000),
         "x1e6": (6000, 3000, 1_000_000),
-        # Keep the largest scale practical while still much larger than 10^6.
-        LARGEST_SCALE_LABEL: (37_200, 5_800, None),
+        # Expand the "LARGEST" sequence dataset well beyond smaller scales.
+        LARGEST_SCALE_LABEL: (37_200_000, 5_800, None),
 
     }
 
@@ -524,8 +523,8 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     configs = {
         "x1000": (120, 100, 1000),
         "x1e6": (4000, 3000, 1_000_000),
-        # Choose a largest-scale matrix that is still solvable via SVD on CI.
-        LARGEST_SCALE_LABEL: (30_000, 4_000, None),
+        # Substantially enlarge the "LARGEST" PCA matrix size.
+        LARGEST_SCALE_LABEL: (300_000, 4_000, None),
     }
 
     if scale_label not in configs:
