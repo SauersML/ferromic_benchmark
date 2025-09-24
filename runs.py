@@ -117,7 +117,7 @@ def _write_benchmark_results_tsv(path: Path = BENCHMARK_TSV_PATH) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-LARGE_SCALE_LABELS = ("x1000", "x1e6", "LARGEST")
+LARGE_SCALE_LABELS = ("medium", "big", "LARGEST")
 LARGEST_SCALE_LABEL = "LARGEST"
 LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
 LARGEST_SCALE_REASON = (
@@ -137,8 +137,8 @@ BASE_PCA_SAMPLES = 3
 
 
 AVERAGE_FST_BLOCK_LENGTHS: dict[str, int] = {
-    "x1000": 20,
-    "x1e6": 400,
+    "medium": 20,
+    "big": 400,
     LARGEST_SCALE_LABEL: 1024,
 }
 
@@ -395,8 +395,8 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     import numpy as np
 
     configs = {
-        "x1000": (200, 100, 1000),
-        "x1e6": (4000, 5000, 1_000_000),
+        "medium": (200, 100, 1000),
+        "big": (4000, 5000, 1_000_000),
         # Push the "LARGEST" dataset close to 1 GiB of diploid genotypes while
         # remaining comfortably above the million-scale configuration.
         LARGEST_SCALE_LABEL: (16_384, 32_768, None),
@@ -418,7 +418,7 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         if simulated_total != expected:
             raise AssertionError("Simulated dataset does not match required scale factor")
     else:
-        smaller_scale_total = configs["x1e6"][0] * configs["x1e6"][1]
+        smaller_scale_total = configs["big"][0] * configs["big"][1]
         if simulated_total <= smaller_scale_total:
             raise AssertionError("Largest-scale dataset must exceed million-scale size")
 
@@ -434,7 +434,7 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         )
         return g, subpops
 
-    rng = np.random.default_rng(42 if scale_label == "x1000" else 4242)
+    rng = np.random.default_rng(42 if scale_label == "medium" else 4242)
     subpop_labels = np.empty(n_samples, dtype=np.int8)
     for label, indices in enumerate(subpops):
         subpop_labels[indices] = label
@@ -467,8 +467,8 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     import allel
 
     configs = {
-        "x1000": (100, None, 1000),
-        "x1e6": (5000, None, 1_000_000),
+        "medium": (100, None, 1000),
+        "big": (5000, None, 1_000_000),
         # Scale the "LARGEST" haplotype data to roughly 1 GiB of haplotype calls,
         # providing a stress case far beyond the million-scale scenario.
         LARGEST_SCALE_LABEL: (32_768, 16_384, None),
@@ -496,7 +496,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         if explicit_variants is None:
             raise AssertionError("Explicit variant count required for largest scale")
         n_variants_total = explicit_variants
-        smaller_required_total = base_total * configs["x1e6"][2]
+        smaller_required_total = base_total * configs["big"][2]
         if n_variants_total * total_samples <= smaller_required_total:
             raise AssertionError("Largest-scale haplotypes must exceed million-scale size")
 
@@ -520,7 +520,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         pos = np.arange(2, 2 + pos_step * n_variants_total, pos_step, dtype=np.int32)
         return allel.HaplotypeArray(haplotypes, copy=False), pos
 
-    rng = np.random.default_rng(123 if scale_label == "x1000" else 123_456)
+    rng = np.random.default_rng(123 if scale_label == "medium" else 123_456)
     max_allele = 4
     haplotypes = np.empty((n_variants_total, total_samples), dtype=np.int8)
 
@@ -556,8 +556,8 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     import allel
 
     configs = {
-        "x1000": (360, 50, 1000),
-        "x1e6": (6000, 3000, 1_000_000),
+        "medium": (360, 50, 1000),
+        "big": (6000, 3000, 1_000_000),
         # Expand the "LARGEST" sequence dataset to around 1 GiB of diploid genotypes
         # while remaining comfortably beyond the million-scale baseline.
         LARGEST_SCALE_LABEL: (16_384, 32_768, None),
@@ -580,7 +580,7 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
                 "Simulated sequence dataset does not match required scale factor"
             )
     else:
-        smaller_scale_total = configs["x1e6"][0] * configs["x1e6"][1]
+        smaller_scale_total = configs["big"][0] * configs["big"][1]
         if simulated_total <= smaller_scale_total:
             raise AssertionError("Largest-scale sequence data must exceed million scale")
 
@@ -596,7 +596,7 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
         pos = np.arange(2, 2 + 5 * n_variants, 5, dtype=np.int32)
         return allel.GenotypeArray(genotype, copy=False), pos
 
-    rng = np.random.default_rng(2023 if scale_label == "x1000" else 2024)
+    rng = np.random.default_rng(2023 if scale_label == "medium" else 2024)
     genotype = np.empty((n_variants, n_samples, ploidy), dtype=np.int8)
 
     allele_lookup = np.array([[0, 0], [0, 1], [1, 1]], dtype=np.int8)
@@ -622,8 +622,8 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     import numpy as np
 
     configs = {
-        "x1000": (120, 100, 1000),
-        "x1e6": (4000, 3000, 1_000_000),
+        "medium": (120, 100, 1000),
+        "big": (4000, 3000, 1_000_000),
         # Grow the "LARGEST" PCA matrix to approximately 1 GiB of float32 data while
         # significantly exceeding the million-scale case.
         LARGEST_SCALE_LABEL: (16_384, 16_384, None),
@@ -644,7 +644,7 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
         if simulated_total != expected:
             raise AssertionError("Simulated PCA dataset does not match required scale factor")
     else:
-        smaller_total = configs["x1e6"][0] * configs["x1e6"][1]
+        smaller_total = configs["big"][0] * configs["big"][1]
         if simulated_total <= smaller_total:
             raise AssertionError("Largest-scale PCA matrix must exceed million scale")
 
@@ -657,7 +657,7 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
         )
         return matrix
 
-    rng = np.random.default_rng(7 if scale_label == "x1000" else 77)
+    rng = np.random.default_rng(7 if scale_label == "medium" else 77)
     minor_allele_freqs = rng.uniform(0.01, 0.5, size=n_variants)
     matrix = np.empty((n_variants, n_samples), dtype=np.float64)
     for variant_index, maf in enumerate(minor_allele_freqs):
