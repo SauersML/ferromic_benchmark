@@ -141,18 +141,39 @@ def _initialize_weir_large(mm: "np.memmap", *, seed: int) -> None:
 
     rng = np.random.default_rng(seed)
     allele_lookup = np.array([[0, 0], [0, 1], [1, 1]], dtype=np.int8)
-    chunk_variants = max(1, min(32, n_variants))
+    chunk_variants = max(1, min(48, n_variants))
 
     for start in range(0, n_variants, chunk_variants):
         stop = min(start + chunk_variants, n_variants)
         chunk = mm[start:stop]
         size = stop - start
-        pop_freqs = rng.beta(0.8, 0.8, size=(size, len(subpops)))
-        pop_freqs = np.clip(pop_freqs, 0.02, 0.98)
+        block_size = min(512, max(32, size))
+        base_block_freqs = rng.beta(0.7, 0.7, size=(math.ceil(size / block_size),))
+        base_freqs = np.repeat(base_block_freqs, block_size)[:size]
+        base_freqs = np.clip(base_freqs, 0.01, 0.99)
+
+        divergence = rng.uniform(30.0, 110.0, size=(size, len(subpops)))
+        alpha = np.clip(base_freqs[:, None] * divergence, 0.5, None)
+        beta = np.clip((1.0 - base_freqs)[:, None] * divergence, 0.5, None)
+        pop_freqs = rng.beta(alpha, beta)
+
+        sweep_mask = rng.random(size=(size, len(subpops))) < 0.025
+        sweep_shift = rng.uniform(0.15, 0.35, size=(size, len(subpops)))
+        pop_freqs = np.where(
+            sweep_mask,
+            np.clip(
+                np.where(pop_freqs >= 0.5, pop_freqs + sweep_shift, pop_freqs - sweep_shift),
+                0.005,
+                0.995,
+            ),
+            pop_freqs,
+        )
+
         sample_freqs = pop_freqs[:, subpop_labels]
         genotype_counts = rng.binomial(ploidy, sample_freqs)
         chunk[:] = allele_lookup[genotype_counts]
-        missing_mask = rng.random((size, n_samples)) < 0.01
+        missing_rate = rng.uniform(0.008, 0.015)
+        missing_mask = rng.random((size, n_samples)) < missing_rate
         if np.any(missing_mask):
             chunk[missing_mask] = -1
 
@@ -166,21 +187,48 @@ def _initialize_haplotype_large(
     n_variants_total, total_samples = mm.shape
     chunk_variants = max(1, min(64, n_variants_total))
     allele_values = np.arange(max_allele, dtype=np.int8)
+    n_pops = max(1, total_samples // n_samples_per_pop)
+
+    if n_samples_per_pop * n_pops != total_samples:
+        raise ValueError(
+            "Total haplotype samples must be divisible by n_samples_per_pop for LARGEST scale"
+        )
+
+    def _sample_dirichlet(alpha: "np.ndarray") -> "np.ndarray":
+        gammas = rng.gamma(alpha, 1.0)
+        denom = np.sum(gammas, axis=-1, keepdims=True)
+        denom = np.where(denom == 0, 1.0, denom)
+        return gammas / denom
 
     for start in range(0, n_variants_total, chunk_variants):
         stop = min(start + chunk_variants, n_variants_total)
         chunk = mm[start:stop]
         size = stop - start
-        pop_freqs = rng.dirichlet(np.full(max_allele, 1.0), size=(size, 2))
-        for pop_index in range(2):
+        block_size = min(256, max(32, size))
+        base_blocks = rng.dirichlet(np.linspace(1.5, 0.4, max_allele), size=(math.ceil(size / block_size),))
+        base_weights = np.repeat(base_blocks, block_size, axis=0)[:size]
+
+        divergence = rng.uniform(6.0, 22.0, size=(size, n_pops))
+        mutational_bias = rng.beta(0.6, 0.9, size=(size, max_allele))
+        mutational_bias = np.clip(mutational_bias, 0.02, 0.95)
+
+        for pop_index in range(n_pops):
             start_col = pop_index * n_samples_per_pop
             stop_col = start_col + n_samples_per_pop
-            probs = pop_freqs[:, pop_index, :]
+            alpha = base_weights * divergence[:, pop_index][:, None]
+            alpha = np.clip(alpha + mutational_bias, 0.2, None)
+            probs = _sample_dirichlet(alpha)
+
             cdf = np.cumsum(probs, axis=-1)
             random_values = rng.random((size, n_samples_per_pop, 1))
             indices = np.sum(random_values > cdf[:, None, :-1], axis=-1)
             chunk[:, start_col:stop_col] = allele_values[indices]
-        missing_mask = rng.random((size, total_samples)) < 0.01
+        migration_mask = rng.random((size, total_samples)) < 0.002
+        if np.any(migration_mask):
+            migrants = rng.integers(0, max_allele, size=np.count_nonzero(migration_mask), dtype=np.int8)
+            chunk[migration_mask] = migrants
+        missing_mask = rng.random((size, total_samples)) < 0.012
+
         if np.any(missing_mask):
             chunk[missing_mask] = -1
 
@@ -192,16 +240,40 @@ def _initialize_sequence_large(mm: "np.memmap", *, seed: int) -> None:
     rng = np.random.default_rng(seed)
     allele_lookup = np.array([[0, 0], [0, 1], [1, 1]], dtype=np.int8)
     chunk_variants = max(1, min(64, n_variants))
+    n_subpops = min(3, n_samples)
+    subpops = _build_even_subpops(n_samples, n_subpops=n_subpops)
+    subpop_labels = np.empty(n_samples, dtype=np.int32)
+    for label, indices in enumerate(subpops):
+        subpop_labels[indices] = label
 
     for start in range(0, n_variants, chunk_variants):
         stop = min(start + chunk_variants, n_variants)
         chunk = mm[start:stop]
         size = stop - start
-        allele_freqs = rng.beta(0.9, 0.9, size=size)
-        allele_freqs = np.clip(allele_freqs, 0.01, 0.99)
-        genotype_counts = rng.binomial(ploidy, allele_freqs[:, None], size=(size, n_samples))
+        block_size = min(512, max(64, size))
+        base_blocks = rng.beta(0.75, 0.75, size=(math.ceil(size / block_size),))
+        base_freqs = np.repeat(base_blocks, block_size)[:size]
+        base_freqs = np.clip(base_freqs, 0.005, 0.995)
+
+        concentration = rng.uniform(35.0, 120.0, size=(size, n_subpops))
+        alpha = np.clip(base_freqs[:, None] * concentration, 0.5, None)
+        beta = np.clip((1.0 - base_freqs)[:, None] * concentration, 0.5, None)
+        subpop_freqs = rng.beta(alpha, beta)
+
+        adaptation_mask = rng.random((size, n_subpops)) < 0.04
+        adaptation_shift = rng.uniform(0.1, 0.3, size=(size, n_subpops))
+        adapted = np.where(
+            subpop_freqs >= 0.5,
+            np.minimum(0.999, subpop_freqs + adaptation_shift),
+            np.maximum(0.001, subpop_freqs - adaptation_shift),
+        )
+        subpop_freqs = np.where(adaptation_mask, adapted, subpop_freqs)
+
+        sample_freqs = subpop_freqs[:, subpop_labels]
+        genotype_counts = rng.binomial(ploidy, sample_freqs)
         chunk[:] = allele_lookup[genotype_counts]
-        missing_mask = rng.random((size, n_samples)) < 0.01
+        missing_rate = rng.uniform(0.01, 0.02)
+        missing_mask = rng.random((size, n_samples)) < missing_rate
         if np.any(missing_mask):
             chunk[missing_mask] = -1
 
@@ -231,7 +303,8 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         "x1e6": (4000, 5000, 1_000_000),
         # The "LARGEST" dataset targets 10x the 10^6 scale size while remaining
         # practical for CI execution.
-        LARGEST_SCALE_LABEL: (40_000, 5_000, None),
+        LARGEST_SCALE_LABEL: (41_200, 5_800, None),
+
     }
 
     if scale_label not in configs:
@@ -300,7 +373,8 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         "x1000": (100, None, 1000),
         "x1e6": (5000, None, 1_000_000),
         # Keep the "LARGEST" haplotype data tractable while remaining the biggest scale.
-        LARGEST_SCALE_LABEL: (60_000, 3000, None),
+        LARGEST_SCALE_LABEL: (60_800, 4_200, None),
+
     }
 
     if scale_label not in configs:
@@ -386,7 +460,8 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
         "x1000": (360, 50, 1000),
         "x1e6": (6000, 3000, 1_000_000),
         # Keep the largest scale practical while still much larger than 10^6.
-        LARGEST_SCALE_LABEL: (36_000, 5_000, None),
+        LARGEST_SCALE_LABEL: (37_200, 5_800, None),
+
     }
 
     if scale_label not in configs:
