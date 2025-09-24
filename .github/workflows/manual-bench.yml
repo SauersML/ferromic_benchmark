@@ -1,0 +1,40 @@
+name: Manual Benchmarks
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Benchmark run ${{ matrix.run }}
+    runs-on: ubuntu-latest
+    env:
+      RUN_LARGEST_SCALE: "1"
+    strategy:
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      max-parallel: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install scikit-allel scipy scikit-learn pytest
+
+      - name: Benchmarks
+        run: python runs.py
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-run-${{ matrix.run }}
+          path: benchmark-results.tsv
+          if-no-files-found: error
