@@ -26,5 +26,5 @@ jobs:
         run: |
           python -m pip install scikit-allel scipy scikit-learn pytest
 
-      - name: Run documentation examples
-        run: python docs_examples.py
+      - name: Benchmarks
+        run: python runs.py
