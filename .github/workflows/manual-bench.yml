@@ -36,5 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results-run-${{ matrix.run }}
-          path: benchmark-results.tsv
+          path: |
+            benchmark-results-ferromic.tsv
+            benchmark-results-scikit-allel.tsv
           if-no-files-found: error

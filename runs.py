@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import atexit
 import math
 import os
@@ -36,6 +37,13 @@ TSV_PATHS = {
     "scikit-allel": Path("benchmark-results-scikit-allel.tsv"),
     "ferromic": Path("benchmark-results-ferromic.tsv"),
 }
+LIBRARY_ALIASES = {
+    "allel": "scikit-allel",
+    "scikit-allel": "scikit-allel",
+    "ferromic": "ferromic",
+}
+DEFAULT_LIBRARIES: tuple[str, ...] = tuple(TSV_PATHS.keys())
+ENABLED_LIBRARIES: set[str] = set(DEFAULT_LIBRARIES)
 _TSV_HEADER = (
     "library",
     "benchmark",
@@ -103,7 +111,36 @@ def _sorted_benchmark_records() -> list[BenchmarkRecord]:
 
 
 def _tsv_path_for_library(library: str) -> Path:
-    return TSV_PATHS.get(library, Path(f"benchmark-results-{library}.tsv"))
+    normalized = _normalize_library_name(library)
+    return TSV_PATHS.get(normalized, Path(f"benchmark-results-{normalized}.tsv"))
+
+
+def _normalize_library_name(library: str) -> str:
+    return LIBRARY_ALIASES.get(library, library)
+
+
+def set_enabled_libraries(libraries: Sequence[str] | None) -> None:
+    """Configure which libraries should run during this benchmark session."""
+
+    global ENABLED_LIBRARIES
+
+    if not libraries:
+        ENABLED_LIBRARIES = set(DEFAULT_LIBRARIES)
+        return
+
+    normalized: set[str] = set()
+    for entry in libraries:
+        normalized.add(_normalize_library_name(entry))
+
+    unknown = sorted(name for name in normalized if name not in TSV_PATHS)
+    if unknown:
+        raise ValueError(f"Unknown libraries requested: {', '.join(unknown)}")
+
+    ENABLED_LIBRARIES = normalized
+
+
+def is_library_enabled(library: str) -> bool:
+    return _normalize_library_name(library) in ENABLED_LIBRARIES
 
 
 def _write_benchmark_results_tsv() -> None:
@@ -145,8 +182,8 @@ def _write_benchmark_results_tsv() -> None:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
 LARGEST_SCALE_LABEL = "LARGEST"
+LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
 LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
 LARGEST_SCALE_REASON = (
     "requires enabling RUN_LARGEST_SCALE=1 and significant CPU/RAM/disk resources"
@@ -476,7 +513,6 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     """Generate haplotype data with optional missing row for divergence tests."""
 
     import numpy as np
-    import allel
 
     configs = {
         "medium": (100, None, 1000),
@@ -530,7 +566,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
             haplotypes[-1] = -1
         pos_step = 10
         pos = np.arange(2, 2 + pos_step * n_variants_total, pos_step, dtype=np.int32)
-        return allel.HaplotypeArray(haplotypes, copy=False), pos
+        return haplotypes, pos
 
     rng = np.random.default_rng(123 if scale_label == "medium" else 123_456)
     max_allele = 4
@@ -557,7 +593,7 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     pos_step = 10
     pos = np.arange(2, 2 + pos_step * n_variants_total, pos_step, dtype=np.int32)
 
-    return allel.HaplotypeArray(haplotypes), pos
+    return haplotypes, pos
 
 
 @lru_cache(maxsize=None)
@@ -565,7 +601,6 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     """Simulate genotype data for sequence diversity and Watterson's theta."""
 
     import numpy as np
-    import allel
 
     configs = {
         "medium": (360, 50, 1000),
@@ -606,7 +641,7 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
             initializer=lambda mm: _initialize_sequence_large(mm, seed=2025),
         )
         pos = np.arange(2, 2 + 5 * n_variants, 5, dtype=np.int32)
-        return allel.GenotypeArray(genotype, copy=False), pos
+        return genotype, pos
 
     rng = np.random.default_rng(2023 if scale_label == "medium" else 2024)
     genotype = np.empty((n_variants, n_samples, ploidy), dtype=np.int8)
@@ -624,7 +659,7 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
         genotype[variant_index] = genotype_variant
 
     pos = np.arange(2, 2 + 5 * n_variants, 5, dtype=np.int32)
-    return allel.GenotypeArray(genotype), pos
+    return genotype, pos
 
 
 @lru_cache(maxsize=None)
@@ -876,405 +911,476 @@ def _ferromic_pca_inputs(scale_label: str) -> dict[str, Any]:
 
 @lru_cache(maxsize=None)
 def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
-    import allel
-    import ferromic
-
     g, subpops = _simulate_weir_genotypes(scale_label)
     details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]}"
-    result = benchmark_call(
-        "allel.weir_cockerham_fst",
-        scale_label,
-        lambda: allel.weir_cockerham_fst(g, subpops),
-        details=details,
-    )
+    result: tuple[Any, Any, Any] | None = None
 
-    ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = details
-    benchmark_call(
-        "ferromic.wc_fst",
-        scale_label,
-        lambda: ferromic.wc_fst(
-            ferromic_inputs["variants"],
-            ferromic_inputs["sample_names"],
-            ferromic_inputs["sample_to_group"],
-            ferromic_inputs["region"],
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        result = benchmark_call(
+            "allel.weir_cockerham_fst",
+            scale_label,
+            lambda: allel.weir_cockerham_fst(g, subpops),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_weir_inputs(scale_label)
+        ferromic_details = details
+        benchmark_call(
+            "ferromic.wc_fst",
+            scale_label,
+            lambda: ferromic.wc_fst(
+                ferromic_inputs["variants"],
+                ferromic_inputs["sample_names"],
+                ferromic_inputs["sample_to_group"],
+                ferromic_inputs["region"],
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
-    import allel
-    import ferromic
-
     g, subpops = _simulate_weir_genotypes(scale_label)
-    g_array = allel.GenotypeArray(g)
-    ac1 = g_array.count_alleles(subpop=subpops[0])
-    ac2 = g_array.count_alleles(subpop=subpops[1])
-    details = f"{ac1.shape[0]}x{ac1.shape[1]}"
-    result = benchmark_call(
-        "allel.hudson_fst",
-        scale_label,
-        lambda: allel.hudson_fst(ac1, ac2),
-        details=details,
-    )
+    result: tuple[Any, Any] | None = None
+    details: str | None = None
 
-    ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = details
-    populations = ferromic_inputs["populations"]
-    benchmark_call(
-        "ferromic.hudson_fst",
-        scale_label,
-        lambda: ferromic.hudson_fst(populations[0], populations[1]),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        g_array = allel.GenotypeArray(g)
+        ac1 = g_array.count_alleles(subpop=subpops[0])
+        ac2 = g_array.count_alleles(subpop=subpops[1])
+        details = f"{ac1.shape[0]}x{ac1.shape[1]}"
+        result = benchmark_call(
+            "allel.hudson_fst",
+            scale_label,
+            lambda: allel.hudson_fst(ac1, ac2),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_weir_inputs(scale_label)
+        ferromic_details = details or f"{g.shape[0]}x{g.shape[2]}"
+        populations = ferromic_inputs["populations"]
+        benchmark_call(
+            "ferromic.hudson_fst",
+            scale_label,
+            lambda: ferromic.hudson_fst(populations[0], populations[1]),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, Any]:
-    import allel
-    import ferromic
-
     g, subpops = _simulate_weir_genotypes(scale_label)
     blen = _block_length_for_average_fst(scale_label)
     details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]} (blen={blen})"
-    result = benchmark_call(
-        "allel.average_weir_cockerham_fst",
-        scale_label,
-        lambda: allel.average_weir_cockerham_fst(g, subpops, blen=blen),
-        details=details,
-    )
+    result: tuple[float, float, Any, Any] | None = None
 
-    ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = details
-    benchmark_call(
-        "ferromic.wc_fst_average",
-        scale_label,
-        lambda: ferromic.wc_fst(
-            ferromic_inputs["variants"],
-            ferromic_inputs["sample_names"],
-            ferromic_inputs["sample_to_group"],
-            ferromic_inputs["region"],
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        result = benchmark_call(
+            "allel.average_weir_cockerham_fst",
+            scale_label,
+            lambda: allel.average_weir_cockerham_fst(g, subpops, blen=blen),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_weir_inputs(scale_label)
+        ferromic_details = details
+        benchmark_call(
+            "ferromic.wc_fst_average",
+            scale_label,
+            lambda: ferromic.wc_fst(
+                ferromic_inputs["variants"],
+                ferromic_inputs["sample_names"],
+                ferromic_inputs["sample_to_group"],
+                ferromic_inputs["region"],
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any, Any]:
-    import allel
-    import ferromic
-
     g, subpops = _simulate_weir_genotypes(scale_label)
-    g_array = allel.GenotypeArray(g)
-    ac1 = g_array.count_alleles(subpop=subpops[0])
-    ac2 = g_array.count_alleles(subpop=subpops[1])
     blen = _block_length_for_average_fst(scale_label)
-    details = f"{ac1.shape[0]}x{ac1.shape[1]} (blen={blen})"
-    result = benchmark_call(
-        "allel.average_hudson_fst",
-        scale_label,
-        lambda: allel.average_hudson_fst(ac1, ac2, blen=blen),
-        details=details,
-    )
+    result: tuple[float, float, Any, Any] | None = None
+    details: str | None = None
 
-    ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = details
-    populations = ferromic_inputs["populations"]
-    region = ferromic_inputs["region"]
-    benchmark_call(
-        "ferromic.hudson_fst_average",
-        scale_label,
-        lambda: ferromic.hudson_fst_with_sites(populations[0], populations[1], region),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        g_array = allel.GenotypeArray(g)
+        ac1 = g_array.count_alleles(subpop=subpops[0])
+        ac2 = g_array.count_alleles(subpop=subpops[1])
+        details = f"{ac1.shape[0]}x{ac1.shape[1]} (blen={blen})"
+        result = benchmark_call(
+            "allel.average_hudson_fst",
+            scale_label,
+            lambda: allel.average_hudson_fst(ac1, ac2, blen=blen),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_weir_inputs(scale_label)
+        ferromic_details = details or f"{g.shape[0]}x{g.shape[2]} (blen={blen})"
+        populations = ferromic_inputs["populations"]
+        region = ferromic_inputs["region"]
+        benchmark_call(
+            "ferromic.hudson_fst_average",
+            scale_label,
+            lambda: ferromic.hudson_fst_with_sites(populations[0], populations[1], region),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _mean_pairwise_difference_cached(scale_label: str) -> Any:
-    import allel
-    import ferromic
-
     haplotypes, _ = _simulate_haplotype_array(scale_label)
-    ac = haplotypes.count_alleles()
-    details = f"{ac.shape[0]}x{ac.shape[1]}"
-    result = benchmark_call(
-        "allel.mean_pairwise_difference",
-        scale_label,
-        lambda: allel.mean_pairwise_difference(ac),
-        details=details,
-    )
+    import numpy as np
 
-    ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
-    ferromic_details = details
-    sample_count = len(ferromic_inputs["sample_names"])
-    benchmark_call(
-        "ferromic.pairwise_differences",
-        scale_label,
-        lambda: ferromic.pairwise_differences(
-            ferromic_inputs["variants"], sample_count
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    hap_array = np.asarray(haplotypes)
+    details = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
+    result: Any = None
+
+    if is_library_enabled("scikit-allel"):
+        import allel
+
+        hap_object = allel.HaplotypeArray(hap_array)
+        ac = hap_object.count_alleles()
+        details = f"{ac.shape[0]}x{ac.shape[1]}"
+        result = benchmark_call(
+            "allel.mean_pairwise_difference",
+            scale_label,
+            lambda: allel.mean_pairwise_difference(ac),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+        ferromic_details = details
+        sample_count = len(ferromic_inputs["sample_names"])
+        benchmark_call(
+            "ferromic.pairwise_differences",
+            scale_label,
+            lambda: ferromic.pairwise_differences(
+                ferromic_inputs["variants"], sample_count
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
 
     return result
 
 
 @lru_cache(maxsize=None)
 def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
-    import allel
-    import ferromic
-
     haplotypes, _ = _simulate_haplotype_array(scale_label)
-    total_samples = haplotypes.shape[1]
-    half = total_samples // 2
-    ac1 = haplotypes.count_alleles(subpop=list(range(0, half)))
-    ac2 = haplotypes.count_alleles(subpop=list(range(half, total_samples)))
-    details = f"{ac1.shape[0]}x{ac1.shape[1]}"
-    result = benchmark_call(
-        "allel.mean_pairwise_difference_between",
-        scale_label,
-        lambda: allel.mean_pairwise_difference_between(ac1, ac2),
-        details=details,
-    )
+    import numpy as np
 
-    ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
-    ferromic_details = details
-    sample_count = len(ferromic_inputs["sample_names"])
-    pop1_indices = set(range(0, sample_count // 2))
-    pop2_indices = set(range(sample_count // 2, sample_count))
+    hap_array = np.asarray(haplotypes)
+    total_samples = hap_array.shape[1]
+    details = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
+    result: Any = None
 
-    def _ferromic_pairwise_between() -> float:
-        comparisons = ferromic.pairwise_differences(
-            ferromic_inputs["variants"], sample_count
+    if is_library_enabled("scikit-allel"):
+        import allel
+
+        hap_object = allel.HaplotypeArray(hap_array)
+        half = total_samples // 2
+        ac1 = hap_object.count_alleles(subpop=list(range(0, half)))
+        ac2 = hap_object.count_alleles(subpop=list(range(half, total_samples)))
+        details = f"{ac1.shape[0]}x{ac1.shape[1]}"
+        result = benchmark_call(
+            "allel.mean_pairwise_difference_between",
+            scale_label,
+            lambda: allel.mean_pairwise_difference_between(ac1, ac2),
+            details=details,
         )
-        diff_total = 0.0
-        comparable_total = 0
-        for comparison in comparisons:
-            if (
-                comparison.sample_i in pop1_indices
-                and comparison.sample_j in pop2_indices
-            ) or (
-                comparison.sample_i in pop2_indices
-                and comparison.sample_j in pop1_indices
-            ):
-                diff_total += float(comparison.differences)
-                comparable_total += int(comparison.comparable_sites)
-        if comparable_total == 0:
-            return float("nan")
-        return diff_total / comparable_total
 
-    benchmark_call(
-        "ferromic.pairwise_differences_between",
-        scale_label,
-        _ferromic_pairwise_between,
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+        ferromic_details = details
+        sample_count = len(ferromic_inputs["sample_names"])
+        pop1_indices = set(range(0, sample_count // 2))
+        pop2_indices = set(range(sample_count // 2, sample_count))
+
+        def _ferromic_pairwise_between() -> float:
+            comparisons = ferromic.pairwise_differences(
+                ferromic_inputs["variants"], sample_count
+            )
+            diff_total = 0.0
+            comparable_total = 0
+            for comparison in comparisons:
+                if (
+                    comparison.sample_i in pop1_indices
+                    and comparison.sample_j in pop2_indices
+                ) or (
+                    comparison.sample_i in pop2_indices
+                    and comparison.sample_j in pop1_indices
+                ):
+                    diff_total += float(comparison.differences)
+                    comparable_total += int(comparison.comparable_sites)
+            if comparable_total == 0:
+                return float("nan")
+            return diff_total / comparable_total
+
+        benchmark_call(
+            "ferromic.pairwise_differences_between",
+            scale_label,
+            _ferromic_pairwise_between,
+            details=ferromic_details,
+            library="ferromic",
+        )
 
     return result
 
 
 @lru_cache(maxsize=None)
 def _sequence_divergence_cached(scale_label: str) -> float:
-    import allel
-    import ferromic
-
     haplotypes, pos = _simulate_haplotype_array(scale_label, include_missing_row=True)
-    total_samples = haplotypes.shape[1]
-    half = total_samples // 2
-    ac1 = haplotypes.count_alleles(subpop=list(range(0, half)))
-    ac2 = haplotypes.count_alleles(subpop=list(range(half, total_samples)))
-    start = 1
-    stop = pos[-1] + 5
-    details = f"{ac1.shape[0]}x{ac1.shape[1]}"
-    result = benchmark_call(
-        "allel.sequence_divergence",
-        scale_label,
-        lambda: allel.sequence_divergence(pos, ac1, ac2, start=start, stop=stop),
-        details=details,
-    )
+    import numpy as np
 
-    ferromic_inputs = _ferromic_haplotype_inputs(scale_label, include_missing_row=True)
-    ferromic_details = details
-    sequence_length = ferromic_inputs["sequence_length"]
+    hap_array = np.asarray(haplotypes)
+    total_samples = hap_array.shape[1]
+    details: str | None = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
+    result: float | None = None
 
-    def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
-        haplotypes_spec = [(index, 0) for index in indices]
-        return {
-            "id": pop_id,
-            "haplotypes": haplotypes_spec,
-            "variants": ferromic_inputs["variants"],
-            "sequence_length": sequence_length,
-            "sample_names": ferromic_inputs["sample_names"],
-        }
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    mid = len(ferromic_inputs["sample_names"]) // 2
-    pop1 = _population("pop1", range(0, mid))
-    pop2 = _population("pop2", range(mid, len(ferromic_inputs["sample_names"])))
+        hap_object = allel.HaplotypeArray(hap_array)
+        half = total_samples // 2
+        ac1 = hap_object.count_alleles(subpop=list(range(0, half)))
+        ac2 = hap_object.count_alleles(subpop=list(range(half, total_samples)))
+        start = 1
+        stop = pos[-1] + 5
+        details = f"{ac1.shape[0]}x{ac1.shape[1]}"
+        result = benchmark_call(
+            "allel.sequence_divergence",
+            scale_label,
+            lambda: allel.sequence_divergence(pos, ac1, ac2, start=start, stop=stop),
+            details=details,
+        )
 
-    benchmark_call(
-        "ferromic.hudson_dxy",
-        scale_label,
-        lambda: ferromic.hudson_dxy(pop1, pop2),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("ferromic"):
+        import ferromic
 
-    return result
+        ferromic_inputs = _ferromic_haplotype_inputs(scale_label, include_missing_row=True)
+        ferromic_details = details
+        sequence_length = ferromic_inputs["sequence_length"]
+
+        def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
+            haplotypes_spec = [(index, 0) for index in indices]
+            return {
+                "id": pop_id,
+                "haplotypes": haplotypes_spec,
+                "variants": ferromic_inputs["variants"],
+                "sequence_length": sequence_length,
+                "sample_names": ferromic_inputs["sample_names"],
+            }
+
+        mid = len(ferromic_inputs["sample_names"]) // 2
+        pop1 = _population("pop1", range(0, mid))
+        pop2 = _population("pop2", range(mid, len(ferromic_inputs["sample_names"])))
+
+        benchmark_call(
+            "ferromic.hudson_dxy",
+            scale_label,
+            lambda: ferromic.hudson_dxy(pop1, pop2),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
-    import allel
-    import ferromic
-
     genotype, pos = _simulate_sequence_genotypes(scale_label)
-    ac = genotype.count_alleles()
+    import numpy as np
+
+    geno_array = np.asarray(genotype)
+    details: str | None = f"{geno_array.shape[0]}x{geno_array.shape[2]}"
     start = 1
     stop = pos[-1] + 5
-    details = f"{ac.shape[0]}x{ac.shape[1]}"
+    pi: float | None = None
+    theta: float | None = None
 
-    pi = benchmark_call(
-        "allel.sequence_diversity",
-        scale_label,
-        lambda: allel.sequence_diversity(pos, ac, start=start, stop=stop),
-        details=details,
-    )
-    theta = benchmark_call(
-        "allel.watterson_theta",
-        scale_label,
-        lambda: allel.watterson_theta(pos, ac, start=start, stop=stop),
-        details=details,
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    ferromic_inputs = _ferromic_sequence_inputs(scale_label)
-    ferromic_details = details
-    sequence_length = ferromic_inputs["sequence_length"]
-    sample_names = ferromic_inputs["sample_names"]
-    haplotypes = [
-        (sample_index, allele_index)
-        for sample_index in range(len(sample_names))
-        for allele_index in (0, 1)
-    ]
+        g_object = allel.GenotypeArray(geno_array)
+        ac = g_object.count_alleles()
+        details = f"{ac.shape[0]}x{ac.shape[1]}"
 
-    benchmark_call(
-        "ferromic.nucleotide_diversity",
-        scale_label,
-        lambda: ferromic.nucleotide_diversity(
-            ferromic_inputs["variants"], haplotypes, sequence_length
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+        pi = benchmark_call(
+            "allel.sequence_diversity",
+            scale_label,
+            lambda: allel.sequence_diversity(pos, ac, start=start, stop=stop),
+            details=details,
+        )
+        theta = benchmark_call(
+            "allel.watterson_theta",
+            scale_label,
+            lambda: allel.watterson_theta(pos, ac, start=start, stop=stop),
+            details=details,
+        )
 
-    def _ferromic_theta() -> float:
-        seg_sites = ferromic.segregating_sites(ferromic_inputs["variants"])
-        sample_count = len(haplotypes)
-        return ferromic.watterson_theta(seg_sites, sample_count, sequence_length)
+    if is_library_enabled("ferromic"):
+        import ferromic
 
-    benchmark_call(
-        "ferromic.watterson_theta",
-        scale_label,
-        _ferromic_theta,
-        details=ferromic_details,
-        library="ferromic",
-    )
+        ferromic_inputs = _ferromic_sequence_inputs(scale_label)
+        ferromic_details = details
+        sequence_length = ferromic_inputs["sequence_length"]
+        sample_names = ferromic_inputs["sample_names"]
+        haplotypes = [
+            (sample_index, allele_index)
+            for sample_index in range(len(sample_names))
+            for allele_index in (0, 1)
+        ]
 
-    return pi, theta
+        benchmark_call(
+            "ferromic.nucleotide_diversity",
+            scale_label,
+            lambda: ferromic.nucleotide_diversity(
+                ferromic_inputs["variants"], haplotypes, sequence_length
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+        def _ferromic_theta() -> float:
+            seg_sites = ferromic.segregating_sites(ferromic_inputs["variants"])
+            sample_count = len(haplotypes)
+            return ferromic.watterson_theta(seg_sites, sample_count, sequence_length)
+
+        benchmark_call(
+            "ferromic.watterson_theta",
+            scale_label,
+            _ferromic_theta,
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return pi, theta  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
-    import allel
-    import ferromic
-
     gn = _simulate_pca_matrix(scale_label)
     details = f"{gn.shape[0]}x{gn.shape[1]}"
-    result = benchmark_call(
-        "allel.pca",
-        scale_label,
-        lambda: allel.pca(gn, n_components=3),
-        details=details,
-    )
+    result: tuple[Any, Any] | None = None
 
-    ferromic_inputs = _ferromic_pca_inputs(scale_label)
-    ferromic_details = details
-    benchmark_call(
-        "ferromic.chromosome_pca",
-        scale_label,
-        lambda: ferromic.chromosome_pca(
-            ferromic_inputs["variants"],
-            ferromic_inputs["sample_names"],
-            n_components=3,
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        result = benchmark_call(
+            "allel.pca",
+            scale_label,
+            lambda: allel.pca(gn, n_components=3),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_pca_inputs(scale_label)
+        ferromic_details = details
+        benchmark_call(
+            "ferromic.chromosome_pca",
+            scale_label,
+            lambda: ferromic.chromosome_pca(
+                ferromic_inputs["variants"],
+                ferromic_inputs["sample_names"],
+                n_components=3,
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=None)
 def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
-    import allel
-    import ferromic
-
     gn = _simulate_pca_matrix(scale_label)
     details = f"{gn.shape[0]}x{gn.shape[1]}"
-    result = benchmark_call(
-        "allel.randomized_pca",
-        scale_label,
-        lambda: allel.randomized_pca(gn, n_components=3, random_state=0),
-        details=details,
-    )
+    result: tuple[Any, Any] | None = None
 
-    ferromic_inputs = _ferromic_pca_inputs(scale_label)
-    ferromic_details = details
-    benchmark_call(
-        "ferromic.chromosome_pca_randomized",
-        scale_label,
-        lambda: ferromic.chromosome_pca(
-            ferromic_inputs["variants"],
-            ferromic_inputs["sample_names"],
-            n_components=3,
-        ),
-        details=ferromic_details,
-        library="ferromic",
-    )
+    if is_library_enabled("scikit-allel"):
+        import allel
 
-    return result
+        result = benchmark_call(
+            "allel.randomized_pca",
+            scale_label,
+            lambda: allel.randomized_pca(gn, n_components=3, random_state=0),
+            details=details,
+        )
+
+    if is_library_enabled("ferromic"):
+        import ferromic
+
+        ferromic_inputs = _ferromic_pca_inputs(scale_label)
+        ferromic_details = details
+        benchmark_call(
+            "ferromic.chromosome_pca_randomized",
+            scale_label,
+            lambda: ferromic.chromosome_pca(
+                ferromic_inputs["variants"],
+                ferromic_inputs["sample_names"],
+                n_components=3,
+            ),
+            details=ferromic_details,
+            library="ferromic",
+        )
+
+    return result  # type: ignore[return-value]
 
 
-def ensure_dependencies_installed() -> None:
+def ensure_dependencies_installed(libraries: Sequence[str]) -> None:
     """Install runtime dependencies required for the documentation tests."""
 
+    requested = {_normalize_library_name(name) for name in libraries}
+    packages = ["scipy", "scikit-learn", "pytest"]
+
+    if "ferromic" in requested:
+        packages.append("ferromic")
+    if "scikit-allel" in requested:
+        packages.append("scikit-allel")
+
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "ferromic",
-            "scikit-allel",
-            "scipy",
-            "scikit-learn",
-            "pytest",
-        ],
+        [sys.executable, "-m", "pip", "install", *packages],
         check=True,
     )
 
@@ -1294,6 +1400,21 @@ def benchmark_call(
     if repeat < 1 or number < 1:
         raise ValueError("repeat and number must be positive integers")
 
+    normalized_library = _normalize_library_name(library)
+
+    if not is_library_enabled(normalized_library):
+        BENCHMARK_RESULTS.append(
+            BenchmarkRecord(
+                library=normalized_library,
+                category=category,
+                size_label=size_label,
+                seconds=math.nan,
+                details=details,
+                skipped=True,
+            )
+        )
+        return None  # type: ignore[return-value]
+
     result: dict[str, T] = {}
 
     def runner() -> None:
@@ -1305,7 +1426,7 @@ def benchmark_call(
     value = result["value"]
     BENCHMARK_RESULTS.append(
         BenchmarkRecord(
-            library=library,
+            library=normalized_library,
             category=category,
             size_label=size_label,
             seconds=best,
@@ -1348,6 +1469,15 @@ def _print_benchmarks() -> None:
 atexit.register(_print_benchmarks)
 
 
+def _skip_if_library_disabled(library: str) -> None:
+    if is_library_enabled(library):
+        return
+
+    import pytest  # type: ignore
+
+    pytest.skip(f"Library '{library}' benchmarks disabled via CLI flag")
+
+
 def _build_weir_cockerham_inputs():
     import numpy as np
 
@@ -1386,6 +1516,9 @@ def _build_haplotype_array():
 
 @lru_cache(maxsize=1)
 def _weir_original_results_cached() -> tuple[Any, Any, Any]:
+    if not is_library_enabled("scikit-allel"):
+        return None  # type: ignore[return-value]
+
     import allel
 
     g, subpops = _build_weir_cockerham_inputs()
@@ -1399,6 +1532,8 @@ def _weir_original_results_cached() -> tuple[Any, Any, Any]:
 
 
 def test_weir_cockerham_fst_components():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1453,6 +1588,8 @@ def test_weir_cockerham_fst_components():
 
 
 def test_weir_cockerham_fst_variants_and_overall():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1506,6 +1643,8 @@ def test_weir_cockerham_fst_variants_and_overall():
 
 
 def test_average_weir_cockerham_fst_block_jackknife():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1551,6 +1690,8 @@ def test_average_weir_cockerham_fst_block_jackknife():
 
 
 def test_hudson_fst_examples():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1600,6 +1741,8 @@ def test_hudson_fst_examples():
 
 
 def test_average_hudson_fst_block_jackknife():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1648,6 +1791,8 @@ def test_average_hudson_fst_block_jackknife():
 
 
 def test_mean_pairwise_difference():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1673,6 +1818,8 @@ def test_mean_pairwise_difference():
 
 
 def test_sequence_diversity_and_watterson_theta():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1718,6 +1865,8 @@ def test_sequence_diversity_and_watterson_theta():
 
 
 def test_mean_pairwise_difference_between_and_sequence_divergence():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1804,6 +1953,8 @@ def _assert_componentwise_allclose(actual, expected, *, rtol: float = 0.0, atol:
 
 
 def test_pca_example():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1836,6 +1987,8 @@ def test_pca_example():
 
 
 def test_randomized_pca_example():
+    _skip_if_library_disabled("scikit-allel")
+
     import numpy as np
     import allel
 
@@ -1867,8 +2020,74 @@ def test_randomized_pca_example():
         assert np.all(model_large.explained_variance_ratio_ >= 0)
 
 
-def main() -> int:
-    ensure_dependencies_installed()
+def test_ferromic_weir_benchmarks():
+    _skip_if_library_disabled("ferromic")
+
+    for label in LARGE_SCALE_LABELS:
+        _weir_results_cached(label)
+        _average_weir_results_cached(label)
+
+
+def test_ferromic_hudson_benchmarks():
+    _skip_if_library_disabled("ferromic")
+
+    for label in LARGE_SCALE_LABELS:
+        _hudson_results_cached(label)
+        _average_hudson_results_cached(label)
+
+
+def test_ferromic_sequence_benchmarks():
+    _skip_if_library_disabled("ferromic")
+
+    for label in LARGE_SCALE_LABELS:
+        _sequence_divergence_cached(label)
+        _sequence_diversity_cached(label)
+
+
+def test_ferromic_pairwise_benchmarks():
+    _skip_if_library_disabled("ferromic")
+
+    for label in LARGE_SCALE_LABELS:
+        _mean_pairwise_difference_cached(label)
+        _mean_pairwise_difference_between_cached(label)
+
+
+def test_ferromic_pca_benchmarks():
+    _skip_if_library_disabled("ferromic")
+
+    for label in LARGE_SCALE_LABELS:
+        _pca_results_cached(label)
+        _randomized_pca_results_cached(label)
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run benchmark suites for ferromic and scikit-allel")
+    parser.add_argument(
+        "--ferromic",
+        action="store_true",
+        help="Run only ferromic benchmarks",
+    )
+    parser.add_argument(
+        "--allel",
+        action="store_true",
+        help="Run only scikit-allel benchmarks",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+
+    requested: list[str] = []
+    if args.ferromic:
+        requested.append("ferromic")
+    if args.allel:
+        requested.append("scikit-allel")
+
+    set_enabled_libraries(requested or None)
+    libraries = sorted(ENABLED_LIBRARIES)
+
+    ensure_dependencies_installed(libraries)
 
     import pytest  # type: ignore
 
@@ -1882,4 +2101,5 @@ def pytest_sessionfinish(session, exitstatus):  # type: ignore[unused-argument]
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.modules.setdefault("runs", sys.modules[__name__])
+    raise SystemExit(main(sys.argv[1:]))
