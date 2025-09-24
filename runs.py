@@ -202,9 +202,9 @@ BASE_PCA_SAMPLES = 3
 
 
 AVERAGE_FST_BLOCK_LENGTHS: dict[str, int] = {
-    "medium": 20,
-    "big": 400,
-    LARGEST_SCALE_LABEL: 1024,
+    "medium": 10,
+    "big": 200,
+    LARGEST_SCALE_LABEL: 512,
 }
 
 
@@ -444,11 +444,11 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     import numpy as np
 
     configs = {
-        "medium": (200, 100, 1000),
-        "big": (4000, 5000, 1_000_000),
-        # Push the "LARGEST" dataset close to 1 GiB of diploid genotypes while
+        "medium": (100, 100, 500),
+        "big": (2000, 5000, 500_000),
+        # Size the "LARGEST" dataset near half a GiB of diploid genotypes while
         # remaining comfortably above the million-scale configuration.
-        LARGEST_SCALE_LABEL: (16_384, 32_768, None),
+        LARGEST_SCALE_LABEL: (8_192, 32_768, None),
 
 
     }
@@ -515,11 +515,11 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     import numpy as np
 
     configs = {
-        "medium": (100, None, 1000),
-        "big": (5000, None, 1_000_000),
-        # Scale the "LARGEST" haplotype data to roughly 1 GiB of haplotype calls,
-        # providing a stress case far beyond the million-scale scenario.
-        LARGEST_SCALE_LABEL: (32_768, 16_384, None),
+        "medium": (100, None, 500),
+        "big": (5000, None, 500_000),
+        # Scale the "LARGEST" haplotype data to roughly half a GiB of haplotype
+        # calls, providing a stress case far beyond the million-scale scenario.
+        LARGEST_SCALE_LABEL: (16_384, 16_384, None),
 
 
     }
@@ -603,11 +603,11 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     import numpy as np
 
     configs = {
-        "medium": (360, 50, 1000),
-        "big": (6000, 3000, 1_000_000),
-        # Expand the "LARGEST" sequence dataset to around 1 GiB of diploid genotypes
-        # while remaining comfortably beyond the million-scale baseline.
-        LARGEST_SCALE_LABEL: (16_384, 32_768, None),
+        "medium": (180, 50, 500),
+        "big": (3000, 3000, 500_000),
+        # Expand the "LARGEST" sequence dataset to around half a GiB of diploid
+        # genotypes while remaining comfortably beyond the million-scale baseline.
+        LARGEST_SCALE_LABEL: (8_192, 32_768, None),
 
     }
 
@@ -669,11 +669,11 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     import numpy as np
 
     configs = {
-        "medium": (120, 100, 1000),
-        "big": (4000, 3000, 1_000_000),
-        # Grow the "LARGEST" PCA matrix to approximately 1 GiB of float32 data while
-        # significantly exceeding the million-scale case.
-        LARGEST_SCALE_LABEL: (16_384, 16_384, None),
+        "medium": (60, 100, 500),
+        "big": (2000, 3000, 500_000),
+        # Grow the "LARGEST" PCA matrix to approximately half a GiB of float32 data
+        # while significantly exceeding the million-scale case.
+        LARGEST_SCALE_LABEL: (8_192, 16_384, None),
 
     }
 
