@@ -136,6 +136,20 @@ BASE_PCA_VARIANTS = 4
 BASE_PCA_SAMPLES = 3
 
 
+AVERAGE_FST_BLOCK_LENGTHS: dict[str, int] = {
+    "x1000": 20,
+    "x1e6": 400,
+    LARGEST_SCALE_LABEL: 1024,
+}
+
+
+def _block_length_for_average_fst(scale_label: str) -> int:
+    try:
+        return AVERAGE_FST_BLOCK_LENGTHS[scale_label]
+    except KeyError as exc:  # pragma: no cover - defensive programming
+        raise ValueError(f"Unknown scale label for block length: {scale_label}") from exc
+
+
 def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
     """Evenly partition sample indices into subpopulations."""
 
@@ -685,6 +699,39 @@ def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
 
 
 @lru_cache(maxsize=None)
+def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, Any]:
+    import allel
+
+    g, subpops = _simulate_weir_genotypes(scale_label)
+    blen = _block_length_for_average_fst(scale_label)
+    details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]} (blen={blen})"
+    return benchmark_call(
+        "allel.average_weir_cockerham_fst",
+        scale_label,
+        lambda: allel.average_weir_cockerham_fst(g, subpops, blen=blen),
+        details=details,
+    )
+
+
+@lru_cache(maxsize=None)
+def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any, Any]:
+    import allel
+
+    g, subpops = _simulate_weir_genotypes(scale_label)
+    g_array = allel.GenotypeArray(g)
+    ac1 = g_array.count_alleles(subpop=subpops[0])
+    ac2 = g_array.count_alleles(subpop=subpops[1])
+    blen = _block_length_for_average_fst(scale_label)
+    details = f"{ac1.shape[0]}x{ac1.shape[1]} (blen={blen})"
+    return benchmark_call(
+        "allel.average_hudson_fst",
+        scale_label,
+        lambda: allel.average_hudson_fst(ac1, ac2, blen=blen),
+        details=details,
+    )
+
+
+@lru_cache(maxsize=None)
 def _mean_pairwise_difference_cached(scale_label: str) -> Any:
     import allel
 
@@ -1040,6 +1087,59 @@ def test_weir_cockerham_fst_variants_and_overall():
             assert np.isfinite(fst_overall_large)
 
 
+def test_average_weir_cockerham_fst_block_jackknife():
+    import numpy as np
+    import allel
+
+    g, subpops = _build_weir_cockerham_inputs()
+
+    details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]} (blen=2)"
+    fst, se, vb, vj = benchmark_call(
+        "allel.average_weir_cockerham_fst",
+        "original",
+        lambda: allel.average_weir_cockerham_fst(g, subpops, blen=2),
+        details=details,
+    )
+
+    expected_fst = -4.36809058868914e-17
+    expected_se = 8.0 / 15.0
+    expected_vb = np.array([2.0 / 3.0, -0.4])
+    expected_vj = np.array([-0.4, 2.0 / 3.0])
+
+    np.testing.assert_allclose(fst, expected_fst, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(se, expected_se, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
+
+    for label in LARGE_SCALE_LABELS:
+        if not _is_scale_enabled(label):
+            _record_benchmark_skip(
+                "allel.average_weir_cockerham_fst",
+                label,
+                LARGEST_SCALE_REASON,
+            )
+            continue
+
+        g_large, _ = _simulate_weir_genotypes(label)
+        fst_large, se_large, vb_large, vj_large = _average_weir_results_cached(label)
+        vb_large = np.asarray(vb_large)
+        vj_large = np.asarray(vj_large)
+
+        expected_blocks = math.ceil(
+            g_large.shape[0] / _block_length_for_average_fst(label)
+        )
+
+        assert np.isfinite(fst_large)
+        assert np.isfinite(se_large)
+        assert se_large >= 0
+        assert vb_large.ndim == 1
+        assert vj_large.ndim == 1
+        assert vb_large.shape == (expected_blocks,)
+        assert vj_large.shape == (expected_blocks,)
+        assert np.all(np.isfinite(vb_large))
+        assert np.all(np.isfinite(vj_large))
+
+
 def test_hudson_fst_examples():
     import numpy as np
     import allel
@@ -1094,6 +1194,62 @@ def test_hudson_fst_examples():
         if np.any(valid_mask):
             fst_large = num_large[valid_mask] / den_large[valid_mask]
             assert np.all(np.isfinite(fst_large))
+
+
+def test_average_hudson_fst_block_jackknife():
+    import numpy as np
+    import allel
+
+    g, subpops = _build_weir_cockerham_inputs()
+    g_array = allel.GenotypeArray(g)
+    ac1 = g_array.count_alleles(subpop=subpops[0])
+    ac2 = g_array.count_alleles(subpop=subpops[1])
+
+    details = f"{ac1.shape[0]}x{ac1.shape[1]} (blen=2)"
+    fst, se, vb, vj = benchmark_call(
+        "allel.average_hudson_fst",
+        "original",
+        lambda: allel.average_hudson_fst(ac1, ac2, blen=2),
+        details=details,
+    )
+
+    expected_fst = 1.0 / 7.0
+    expected_se = 17.0 / 45.0
+    expected_vb = np.array([5.0 / 9.0, -0.2])
+    expected_vj = np.array([-0.2, 5.0 / 9.0])
+
+    np.testing.assert_allclose(fst, expected_fst, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(se, expected_se, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
+
+    for label in LARGE_SCALE_LABELS:
+        if not _is_scale_enabled(label):
+            _record_benchmark_skip(
+                "allel.average_hudson_fst",
+                label,
+                LARGEST_SCALE_REASON,
+            )
+            continue
+
+        g_large, _ = _simulate_weir_genotypes(label)
+        fst_large, se_large, vb_large, vj_large = _average_hudson_results_cached(label)
+        vb_large = np.asarray(vb_large)
+        vj_large = np.asarray(vj_large)
+
+        expected_blocks = math.ceil(
+            g_large.shape[0] / _block_length_for_average_fst(label)
+        )
+
+        assert np.isfinite(fst_large)
+        assert np.isfinite(se_large)
+        assert se_large >= 0
+        assert vb_large.ndim == 1
+        assert vj_large.ndim == 1
+        assert vb_large.shape == (expected_blocks,)
+        assert vj_large.shape == (expected_blocks,)
+        assert np.all(np.isfinite(vb_large))
+        assert np.all(np.isfinite(vj_large))
 
 
 def test_mean_pairwise_difference():
