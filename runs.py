@@ -25,11 +25,96 @@ class BenchmarkRecord:
     seconds: float
     details: str | None = None
     skipped: bool = False
+    result_repr: str | None = None
 
 
 BENCHMARK_RESULTS: list[BenchmarkRecord] = []
 BENCHMARK_RESULTS_PRINTED = False
 SKIPPED_BENCHMARKS: set[tuple[str, str]] = set()
+
+BENCHMARK_TSV_PATH = Path("benchmark-results.tsv")
+_TSV_HEADER = ("benchmark", "size_label", "seconds", "result", "details", "skipped")
+
+
+def _stringify_benchmark_result(value: Any) -> str:
+    """Create a stable string representation of a benchmark result."""
+
+    try:
+        import numpy as np  # type: ignore
+    except Exception:  # pragma: no cover - defensive: numpy may be unavailable
+        np = None  # type: ignore
+
+    def _convert(obj: Any) -> str:
+        if np is not None:
+            if isinstance(obj, np.ndarray):  # type: ignore[attr-defined]
+                return repr(obj.tolist())
+            if isinstance(obj, np.generic):  # type: ignore[attr-defined]
+                return repr(obj.item())
+        if isinstance(obj, dict):
+            items = []
+            for key, val in sorted(obj.items(), key=lambda item: repr(item[0])):
+                items.append(f"{_convert(key)}: {_convert(val)}")
+            return "{" + ", ".join(items) + "}"
+        if isinstance(obj, list):
+            return "[" + ", ".join(_convert(item) for item in obj) + "]"
+        if isinstance(obj, tuple):
+            inner = ", ".join(_convert(item) for item in obj)
+            if len(obj) == 1:
+                inner += ","
+            return "(" + inner + ")"
+        if isinstance(obj, (set, frozenset)):
+            parts = sorted(_convert(item) for item in obj)
+            return "{" + ", ".join(parts) + "}"
+        return repr(obj)
+
+    return _convert(value)
+
+
+def _sanitize_tsv_field(text: str) -> str:
+    """Escape control characters that conflict with TSV formatting."""
+
+    return text.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _sorted_benchmark_records() -> list[BenchmarkRecord]:
+    size_order = {label: index for index, label in enumerate(LARGE_SCALE_LABELS)}
+    size_order["original"] = -1
+
+    def _sort_key(record: BenchmarkRecord) -> tuple[str, int, str]:
+        return (
+            record.category,
+            size_order.get(record.size_label, len(size_order)),
+            record.size_label,
+        )
+
+    return sorted(BENCHMARK_RESULTS, key=_sort_key)
+
+
+def _write_benchmark_results_tsv(path: Path = BENCHMARK_TSV_PATH) -> None:
+    """Persist benchmark metadata and outputs for CI artifact collection."""
+
+    lines = ["\t".join(_TSV_HEADER)]
+    if BENCHMARK_RESULTS:
+        for record in _sorted_benchmark_records():
+            seconds_str = ""
+            if not record.skipped and not math.isnan(record.seconds):
+                seconds_str = f"{record.seconds:.9f}"
+
+            result_field = record.result_repr or ""
+            details_field = record.details or ""
+            skipped_field = "true" if record.skipped else "false"
+            line_values = [
+                str(record.category),
+                str(record.size_label),
+                seconds_str,
+                result_field,
+                details_field,
+                skipped_field,
+            ]
+            sanitized = [_sanitize_tsv_field(value) for value in line_values]
+            lines.append("\t".join(sanitized))
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 LARGE_SCALE_LABELS = ("x1000", "x1e6", "LARGEST")
@@ -745,31 +830,34 @@ def benchmark_call(
     timer = timeit.Timer(runner)
     times = timer.repeat(repeat=repeat, number=number)
     best = min(times) / number
+    value = result["value"]
     BENCHMARK_RESULTS.append(
-        BenchmarkRecord(category=category, size_label=size_label, seconds=best, details=details)
+        BenchmarkRecord(
+            category=category,
+            size_label=size_label,
+            seconds=best,
+            details=details,
+            result_repr=_stringify_benchmark_result(value),
+        )
     )
-    return result["value"]
+    return value
 
 
 def _print_benchmarks() -> None:
     global BENCHMARK_RESULTS_PRINTED
 
-    if BENCHMARK_RESULTS_PRINTED or not BENCHMARK_RESULTS:
+    if BENCHMARK_RESULTS_PRINTED:
         return
 
     BENCHMARK_RESULTS_PRINTED = True
+    _write_benchmark_results_tsv()
+
+    if not BENCHMARK_RESULTS:
+        return
+
     print("\nBenchmark results (best of single run):")
-    size_order = {label: index for index, label in enumerate(LARGE_SCALE_LABELS)}
-    size_order["original"] = -1
 
-    def _sort_key(record: BenchmarkRecord) -> tuple[str, int, str]:
-        return (
-            record.category,
-            size_order.get(record.size_label, len(size_order)),
-            record.size_label,
-        )
-
-    for record in sorted(BENCHMARK_RESULTS, key=_sort_key):
+    for record in _sorted_benchmark_records():
         if record.skipped:
             detail = f" ({record.details})" if record.details else ""
             print(f"{record.category} [{record.size_label}]: skipped{detail}")
