@@ -31,7 +31,6 @@ class BenchmarkRecord:
 
 BENCHMARK_RESULTS: list[BenchmarkRecord] = []
 BENCHMARK_RESULTS_PRINTED = False
-SKIPPED_BENCHMARKS: set[tuple[str, str, str]] = set()
 
 TSV_PATHS = {
     "scikit-allel": Path("benchmark-results-scikit-allel.tsv"),
@@ -146,7 +145,7 @@ def _write_benchmark_results_tsv() -> None:
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-LARGE_SCALE_LABELS = ("medium", "big", "LARGEST")
+LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
 LARGEST_SCALE_LABEL = "LARGEST"
 LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
 LARGEST_SCALE_REASON = (
@@ -210,25 +209,6 @@ def _ensure_scale_enabled(scale_label: str) -> None:
         raise RuntimeError(
             f"Scale '{scale_label}' is disabled. {LARGEST_SCALE_REASON}."
         )
-
-
-def _record_benchmark_skip(
-    category: str, label: str, reason: str, *, library: str = "scikit-allel"
-) -> None:
-    key = (library, category, label)
-    if key in SKIPPED_BENCHMARKS:
-        return
-    SKIPPED_BENCHMARKS.add(key)
-    BENCHMARK_RESULTS.append(
-        BenchmarkRecord(
-            library=library,
-            category=category,
-            size_label=label,
-            seconds=math.nan,
-            details=f"skipped: {reason}",
-            skipped=True,
-        )
-    )
 
 
 def _memmap_path(name: str, shape: Sequence[int], dtype_str: str) -> Path:
@@ -704,29 +684,6 @@ FERROMIC_HAPLOTYPE_INPUTS: dict[tuple[str, bool], dict[str, Any]] = {}
 FERROMIC_SEQUENCE_INPUTS: dict[str, dict[str, Any]] = {}
 FERROMIC_PCA_INPUTS: dict[str, dict[str, Any]] = {}
 
-FERROMIC_VARIANT_LIMITS: dict[str, int | None] = {
-    "medium": None,
-    "big": 32,
-    LARGEST_SCALE_LABEL: 64,
-}
-FERROMIC_SAMPLE_LIMITS: dict[str, int | None] = {
-    "medium": None,
-    "big": 32,
-    LARGEST_SCALE_LABEL: 64,
-}
-
-
-def _details_with_subset(
-    details: str | None, subset_details: str | None
-) -> str | None:
-    if subset_details:
-        subset_details = subset_details.strip()
-        if details:
-            return f"{details} {subset_details}"
-        return subset_details
-    return details
-
-
 def _build_sample_names(n_samples: int) -> list[str]:
     return [f"sample_{index}" for index in range(n_samples)]
 
@@ -770,74 +727,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
 
     if scale_label not in FERROMIC_WEIR_INPUTS:
         g, subpops = _simulate_weir_genotypes(scale_label)
-        variant_limit = FERROMIC_VARIANT_LIMITS.get(scale_label)
-        sample_limit = FERROMIC_SAMPLE_LIMITS.get(scale_label)
-
-        original_variants, original_samples = g.shape[0], g.shape[1]
-        subset_details = ""
-
-        if sample_limit is not None and g.shape[1] > sample_limit:
-            group_count = len(subpops)
-            if group_count > 0:
-                base = sample_limit // group_count
-                remainder = sample_limit % group_count
-                selected_by_group: list[list[int]] = []
-                ordered_indices: list[int] = []
-                remaining_capacity = sample_limit
-
-                for group_index, indices in enumerate(subpops):
-                    target = base + (1 if group_index < remainder else 0)
-                    take = min(len(indices), target)
-                    chosen = indices[:take]
-                    selected_by_group.append(chosen.copy())
-                    ordered_indices.extend(chosen)
-                    remaining_capacity -= len(chosen)
-
-                if remaining_capacity > 0:
-                    for group_index, indices in enumerate(subpops):
-                        already = len(selected_by_group[group_index])
-                        available = len(indices) - already
-                        if available <= 0:
-                            continue
-                        take = min(available, remaining_capacity)
-                        if take <= 0:
-                            continue
-                        additional = indices[already : already + take]
-                        selected_by_group[group_index].extend(additional)
-                        ordered_indices.extend(additional)
-                        remaining_capacity -= take
-                        if remaining_capacity <= 0:
-                            break
-
-                if not ordered_indices:
-                    ordered_indices = list(range(sample_limit))
-                    selected_by_group = [
-                        [index for index in ordered_indices if index in indices]
-                        for indices in subpops
-                    ]
-
-                g = g[:, ordered_indices, :]
-                index_map = {
-                    old_index: new_index for new_index, old_index in enumerate(ordered_indices)
-                }
-                subpops = [
-                    [index_map[idx] for idx in group if idx in index_map]
-                    for group in selected_by_group
-                ]
-            else:
-                g = g[:, :sample_limit, :]
-
-        if variant_limit is not None and g.shape[0] > variant_limit:
-            g = g[:variant_limit]
-
         positions = np.arange(g.shape[0], dtype=np.int64)
-
-        if (variant_limit is not None and original_variants > variant_limit) or (
-            sample_limit is not None and original_samples > sample_limit
-        ):
-            subset_details = (
-                f"(ferromic subset variants={g.shape[0]} samples={g.shape[1]})"
-            )
 
         variants = [
             {"position": int(pos), "genotypes": _diploid_variant_genotypes(g[idx])}
@@ -878,7 +768,6 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             "sequence_length": sequence_length,
             "populations": populations,
             "region": region,
-            "subset_details": subset_details,
         }
 
     return FERROMIC_WEIR_INPUTS[scale_label]
@@ -896,62 +785,8 @@ def _ferromic_haplotype_inputs(
         )
         hap_array = np.asarray(haplotypes)
         pos_array = np.asarray(pos)
-        original_variants, original_samples = hap_array.shape
-        variant_limit = FERROMIC_VARIANT_LIMITS.get(scale_label)
-        sample_limit = FERROMIC_SAMPLE_LIMITS.get(scale_label)
-        subset_details = ""
 
-        if sample_limit is not None and hap_array.shape[1] > sample_limit:
-            total_samples = hap_array.shape[1]
-            target_total = min(sample_limit, total_samples)
-            if target_total < 1:
-                target_total = 1
-
-            half = total_samples // 2
-            selected_indices: list[int] = []
-
-            if target_total >= 2 and half > 0:
-                adjusted_total = target_total - (target_total % 2)
-                if adjusted_total == 0:
-                    adjusted_total = 2 if target_total >= 2 else target_total
-                take_first = min(half, adjusted_total // 2)
-                take_second = min(total_samples - half, adjusted_total - take_first)
-                selected_indices.extend(range(0, take_first))
-                selected_indices.extend(range(half, half + take_second))
-
-                while len(selected_indices) < target_total:
-                    for idx in range(total_samples):
-                        if idx in selected_indices:
-                            continue
-                        selected_indices.append(idx)
-                        if len(selected_indices) >= target_total:
-                            break
-            else:
-                selected_indices = list(range(target_total))
-
-            hap_array = hap_array[:, selected_indices]
-
-        if variant_limit is not None and hap_array.shape[0] > variant_limit:
-            if include_missing_row and variant_limit >= 1:
-                keep_prefix = max(0, variant_limit - 1)
-                hap_array = np.concatenate(
-                    (hap_array[:keep_prefix], hap_array[-1:]), axis=0
-                )
-                pos_array = np.concatenate(
-                    (pos_array[:keep_prefix], pos_array[-1:]), axis=0
-                )
-            else:
-                hap_array = hap_array[:variant_limit]
-                pos_array = pos_array[:variant_limit]
-        else:
-            pos_array = pos_array[: hap_array.shape[0]]
-
-        if (variant_limit is not None and original_variants > variant_limit) or (
-            sample_limit is not None and original_samples > sample_limit
-        ):
-            subset_details = (
-                f"(ferromic subset variants={hap_array.shape[0]} samples={hap_array.shape[1]})"
-            )
+        pos_array = pos_array[: hap_array.shape[0]]
 
         variants = [
             {
@@ -969,7 +804,6 @@ def _ferromic_haplotype_inputs(
             "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
-            "subset_details": subset_details,
         }
 
     return FERROMIC_HAPLOTYPE_INPUTS[cache_key]
@@ -982,27 +816,7 @@ def _ferromic_sequence_inputs(scale_label: str) -> dict[str, Any]:
         genotype, pos = _simulate_sequence_genotypes(scale_label)
         g_array = np.asarray(genotype)
         pos_array = np.asarray(pos)
-        original_variants = g_array.shape[0]
-        original_samples = g_array.shape[1]
-        variant_limit = FERROMIC_VARIANT_LIMITS.get(scale_label)
-        sample_limit = FERROMIC_SAMPLE_LIMITS.get(scale_label)
-        subset_details = ""
-
-        if sample_limit is not None and g_array.shape[1] > sample_limit:
-            g_array = g_array[:, :sample_limit, :]
-
-        if variant_limit is not None and g_array.shape[0] > variant_limit:
-            g_array = g_array[:variant_limit]
-            pos_array = pos_array[:variant_limit]
-        else:
-            pos_array = pos_array[: g_array.shape[0]]
-
-        if (variant_limit is not None and original_variants > variant_limit) or (
-            sample_limit is not None and original_samples > sample_limit
-        ):
-            subset_details = (
-                f"(ferromic subset variants={g_array.shape[0]} samples={g_array.shape[1]})"
-            )
+        pos_array = pos_array[: g_array.shape[0]]
 
         variants = [
             {
@@ -1019,7 +833,6 @@ def _ferromic_sequence_inputs(scale_label: str) -> dict[str, Any]:
             "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
-            "subset_details": subset_details,
         }
 
     return FERROMIC_SEQUENCE_INPUTS[scale_label]
@@ -1031,24 +844,6 @@ def _ferromic_pca_inputs(scale_label: str) -> dict[str, Any]:
     if scale_label not in FERROMIC_PCA_INPUTS:
         matrix = _simulate_pca_matrix(scale_label)
         data = np.asarray(matrix)
-        original_variants = data.shape[0]
-        original_samples = data.shape[1]
-        variant_limit = FERROMIC_VARIANT_LIMITS.get(scale_label)
-        sample_limit = FERROMIC_SAMPLE_LIMITS.get(scale_label)
-        subset_details = ""
-
-        if sample_limit is not None and data.shape[1] > sample_limit:
-            data = data[:, :sample_limit]
-
-        if variant_limit is not None and data.shape[0] > variant_limit:
-            data = data[:variant_limit]
-
-        if (variant_limit is not None and original_variants > variant_limit) or (
-            sample_limit is not None and original_samples > sample_limit
-        ):
-            subset_details = (
-                f"(ferromic subset variants={data.shape[0]} samples={data.shape[1]})"
-            )
 
         sample_names = _build_sample_names(data.shape[1])
 
@@ -1074,7 +869,6 @@ def _ferromic_pca_inputs(scale_label: str) -> dict[str, Any]:
             "matrix": data,
             "variants": variants,
             "sample_names": sample_names,
-            "subset_details": subset_details,
         }
 
     return FERROMIC_PCA_INPUTS[scale_label]
@@ -1095,7 +889,7 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
     )
 
     ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     benchmark_call(
         "ferromic.wc_fst",
         scale_label,
@@ -1130,7 +924,7 @@ def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
     )
 
     ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     populations = ferromic_inputs["populations"]
     benchmark_call(
         "ferromic.hudson_fst",
@@ -1159,7 +953,7 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
     )
 
     ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     benchmark_call(
         "ferromic.wc_fst_average",
         scale_label,
@@ -1195,7 +989,7 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
     )
 
     ferromic_inputs = _ferromic_weir_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     populations = ferromic_inputs["populations"]
     region = ferromic_inputs["region"]
     benchmark_call(
@@ -1225,7 +1019,7 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
     )
 
     ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     sample_count = len(ferromic_inputs["sample_names"])
     benchmark_call(
         "ferromic.pairwise_differences",
@@ -1259,7 +1053,7 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
     )
 
     ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     sample_count = len(ferromic_inputs["sample_names"])
     pop1_indices = set(range(0, sample_count // 2))
     pop2_indices = set(range(sample_count // 2, sample_count))
@@ -1316,7 +1110,7 @@ def _sequence_divergence_cached(scale_label: str) -> float:
     )
 
     ferromic_inputs = _ferromic_haplotype_inputs(scale_label, include_missing_row=True)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     sequence_length = ferromic_inputs["sequence_length"]
 
     def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
@@ -1369,7 +1163,7 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
     )
 
     ferromic_inputs = _ferromic_sequence_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     sequence_length = ferromic_inputs["sequence_length"]
     sample_names = ferromic_inputs["sample_names"]
     haplotypes = [
@@ -1419,7 +1213,7 @@ def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
     )
 
     ferromic_inputs = _ferromic_pca_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     benchmark_call(
         "ferromic.chromosome_pca",
         scale_label,
@@ -1450,7 +1244,7 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
     )
 
     ferromic_inputs = _ferromic_pca_inputs(scale_label)
-    ferromic_details = _details_with_subset(details, ferromic_inputs.get("subset_details"))
+    ferromic_details = details
     benchmark_call(
         "ferromic.chromosome_pca_randomized",
         scale_label,
@@ -1646,19 +1440,6 @@ def test_weir_cockerham_fst_components():
     np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-8)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.weir_cockerham_fst",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.wc_fst",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         g_large, subpops_large = _simulate_weir_genotypes(label)
         a_large, b_large, c_large = _weir_results_cached(label)
         assert a_large.shape[0] == g_large.shape[0]
@@ -1703,19 +1484,6 @@ def test_weir_cockerham_fst_variants_and_overall():
     np.testing.assert_allclose(fst_overall, -4.36809058868914e-17, rtol=0, atol=1e-24)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.weir_cockerham_fst",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.wc_fst",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         a_large, b_large, c_large = _weir_results_cached(label)
         with np.errstate(divide="ignore", invalid="ignore"):
             fst_large = a_large / (a_large + b_large + c_large)
@@ -1762,20 +1530,6 @@ def test_average_weir_cockerham_fst_block_jackknife():
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.average_weir_cockerham_fst",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.wc_fst_average",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
-
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_weir_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -1837,19 +1591,6 @@ def test_hudson_fst_examples():
     np.testing.assert_allclose(fst_average, 0.1428571428571429, rtol=0, atol=1e-12)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.hudson_fst",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.hudson_fst",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         num_large, den_large = _hudson_results_cached(label)
         assert num_large.shape == den_large.shape
         valid_mask = den_large > 0
@@ -1886,20 +1627,6 @@ def test_average_hudson_fst_block_jackknife():
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.average_hudson_fst",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.hudson_fst_average",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
-
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_hudson_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -1938,19 +1665,6 @@ def test_mean_pairwise_difference():
     np.testing.assert_allclose(mpd, expected_mpd, rtol=0, atol=1e-8)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.mean_pairwise_difference",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.pairwise_differences",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         mpd_large = _mean_pairwise_difference_cached(label)
         assert mpd_large.ndim == 1
         assert mpd_large.size > 0
@@ -1998,30 +1712,6 @@ def test_sequence_diversity_and_watterson_theta():
     np.testing.assert_allclose(theta_hat_w, 0.10557184750733138, rtol=0, atol=1e-12)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.sequence_diversity",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "allel.watterson_theta",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.nucleotide_diversity",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            _record_benchmark_skip(
-                "ferromic.watterson_theta",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         pi_large, theta_large = _sequence_diversity_cached(label)
         assert pi_large >= 0
         assert theta_large >= 0
@@ -2072,30 +1762,6 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
     np.testing.assert_allclose(dxy, 0.12096774193548387, rtol=0, atol=1e-12)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.mean_pairwise_difference_between",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "allel.sequence_divergence",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.pairwise_differences_between",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            _record_benchmark_skip(
-                "ferromic.hudson_dxy",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         mpd_between_large = _mean_pairwise_difference_between_cached(label)
         assert mpd_between_large.ndim == 1
         assert mpd_between_large.size > 0
@@ -2163,19 +1829,6 @@ def test_pca_example():
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-8)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.pca",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.chromosome_pca",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         coords_large, model_large = _pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
@@ -2208,19 +1861,6 @@ def test_randomized_pca_example():
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-6)
 
     for label in LARGE_SCALE_LABELS:
-        if not _is_scale_enabled(label):
-            _record_benchmark_skip(
-                "allel.randomized_pca",
-                label,
-                LARGEST_SCALE_REASON,
-            )
-            _record_benchmark_skip(
-                "ferromic.chromosome_pca_randomized",
-                label,
-                LARGEST_SCALE_REASON,
-                library="ferromic",
-            )
-            continue
         coords_large, model_large = _randomized_pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
