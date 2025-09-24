@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Execute scikit-allel documentation examples via pytest assertions."""
-
 from __future__ import annotations
 
 import atexit
@@ -301,8 +298,9 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     configs = {
         "x1000": (200, 100, 1000),
         "x1e6": (4000, 5000, 1_000_000),
-        # Scale the "LARGEST" dataset to substantially exceed other sizes.
-        LARGEST_SCALE_LABEL: (41_200_000, 5_800, None),
+        # Expand the "LARGEST" dataset 1000x via roughly balanced variant/sample growth.
+        LARGEST_SCALE_LABEL: (1_318_400, 181_250, None),
+
 
     }
 
@@ -371,8 +369,9 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     configs = {
         "x1000": (100, None, 1000),
         "x1e6": (5000, None, 1_000_000),
-        # Dramatically expand the "LARGEST" haplotype data volume.
-        LARGEST_SCALE_LABEL: (60_800, 4_200_000, None),
+        # Grow the "LARGEST" haplotype data 1000x with balanced sample and variant scaling.
+        LARGEST_SCALE_LABEL: (1_945_600, 131_250, None),
+
 
     }
 
@@ -458,8 +457,8 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     configs = {
         "x1000": (360, 50, 1000),
         "x1e6": (6000, 3000, 1_000_000),
-        # Expand the "LARGEST" sequence dataset well beyond smaller scales.
-        LARGEST_SCALE_LABEL: (37_200_000, 5_800, None),
+        # Expand the "LARGEST" sequence dataset 1000x with balanced sample and variant growth.
+        LARGEST_SCALE_LABEL: (1_162_500, 185_600, None),
 
     }
 
@@ -523,8 +522,9 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     configs = {
         "x1000": (120, 100, 1000),
         "x1e6": (4000, 3000, 1_000_000),
-        # Substantially enlarge the "LARGEST" PCA matrix size.
-        LARGEST_SCALE_LABEL: (300_000, 4_000, None),
+        # Increase the "LARGEST" PCA matrix 10x with more even variant and sample growth.
+        LARGEST_SCALE_LABEL: (93_750, 12_800, None),
+
     }
 
     if scale_label not in configs:
