@@ -554,8 +554,9 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         "medium": (100, None, 500),
         "big": (5000, None, 500_000),
         # Scale the "LARGEST" haplotype data to roughly 0.015 GiB of haplotype
-        # calls, providing a stress case far beyond the million-scale scenario
-        # without exhausting CI memory limits.
+        # calls (about 0.017 GiB when the synthetic all-missing row is included),
+        # providing a stress case far beyond the million-scale scenario without
+        # exhausting CI memory limits.
         LARGEST_SCALE_LABEL: (2_000, 4_001, None),
 
 
@@ -580,10 +581,9 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     else:
         if explicit_variants is None:
             raise AssertionError("Explicit variant count required for largest scale")
-        n_variants_total = explicit_variants
         smaller_required_total = base_total * configs["big"][2]
-        if n_variants_total * total_samples <= smaller_required_total:
-            raise AssertionError("Largest-scale haplotypes must exceed million-scale size")
+        minimum_variants = smaller_required_total // total_samples + 1
+        n_variants_total = max(explicit_variants, minimum_variants)
 
     if scale_label == LARGEST_SCALE_LABEL:
         dtype = np.int8
