@@ -184,8 +184,7 @@ def _write_benchmark_results_tsv() -> None:
 
 LARGEST_SCALE_LABEL = "LARGEST"
 LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
-LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
-LARGEST_SCALE_REASON = "requires enabling RUN_LARGEST_SCALE=1 and significant CPU/RAM/disk resources"
+LARGEST_SCALE_REASON = "requires significant CPU/RAM/disk resources"
 FERROMIC_BIG_ENV_VAR = "RUN_FERROMIC_BIG_SCALE"
 FERROMIC_BIG_REASON = "requires enabling RUN_FERROMIC_BIG_SCALE=1 due to ferromic runtime"
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
@@ -233,12 +232,7 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
-    if scale_label != LARGEST_SCALE_LABEL:
-        return True
-    value = os.environ.get(LARGEST_ENV_VAR, "").strip().lower()
-    if not value:
-        return False
-    return value in {"1", "true", "yes", "on"}
+    return True
 
 
 def _ensure_scale_enabled(scale_label: str) -> None:
