@@ -185,9 +185,9 @@ def _write_benchmark_results_tsv() -> None:
 LARGEST_SCALE_LABEL = "LARGEST"
 LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
 LARGEST_ENV_VAR = "RUN_LARGEST_SCALE"
-LARGEST_SCALE_REASON = (
-    "requires enabling RUN_LARGEST_SCALE=1 and significant CPU/RAM/disk resources"
-)
+LARGEST_SCALE_REASON = "requires enabling RUN_LARGEST_SCALE=1 and significant CPU/RAM/disk resources"
+FERROMIC_BIG_ENV_VAR = "RUN_FERROMIC_BIG_SCALE"
+FERROMIC_BIG_REASON = "requires enabling RUN_FERROMIC_BIG_SCALE=1 due to ferromic runtime"
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
 
 
@@ -237,7 +237,7 @@ def _is_scale_enabled(scale_label: str) -> bool:
         return True
     value = os.environ.get(LARGEST_ENV_VAR, "").strip().lower()
     if not value:
-        return True
+        return False
     return value in {"1", "true", "yes", "on"}
 
 
@@ -246,6 +246,47 @@ def _ensure_scale_enabled(scale_label: str) -> None:
         raise RuntimeError(
             f"Scale '{scale_label}' is disabled. {LARGEST_SCALE_REASON}."
         )
+
+
+def _enabled_scale_labels() -> tuple[str, ...]:
+    return tuple(label for label in LARGE_SCALE_LABELS if _is_scale_enabled(label))
+
+
+def _is_library_scale_enabled(library: str, scale_label: str) -> bool:
+    if not _is_scale_enabled(scale_label):
+        return False
+    normalized = _normalize_library_name(library)
+    if normalized == "ferromic" and scale_label == "big":
+        value = os.environ.get(FERROMIC_BIG_ENV_VAR, "").strip().lower()
+        if not value:
+            return False
+        return value in {"1", "true", "yes", "on"}
+    return True
+
+
+def _record_scale_skip(
+    *,
+    library: str,
+    category: str,
+    size_label: str,
+    details: str | None = None,
+    reason: str | None = None,
+) -> None:
+    normalized = _normalize_library_name(library)
+    combined_details: str | None = None
+    if details or reason:
+        parts = [part for part in (details, reason) if part]
+        combined_details = "; ".join(parts)
+    BENCHMARK_RESULTS.append(
+        BenchmarkRecord(
+            library=normalized,
+            category=category,
+            size_label=size_label,
+            seconds=math.nan,
+            details=combined_details,
+            skipped=True,
+        )
+    )
 
 
 def _memmap_path(name: str, shape: Sequence[int], dtype_str: str) -> Path:
@@ -926,22 +967,32 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_weir_inputs(scale_label)
         ferromic_details = details
-        benchmark_call(
-            "ferromic.wc_fst",
-            scale_label,
-            lambda: ferromic.wc_fst(
-                ferromic_inputs["variants"],
-                ferromic_inputs["sample_names"],
-                ferromic_inputs["sample_to_group"],
-                ferromic_inputs["region"],
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            benchmark_call(
+                "ferromic.wc_fst",
+                scale_label,
+                lambda: ferromic.wc_fst(
+                    ferromic_inputs["variants"],
+                    ferromic_inputs["sample_names"],
+                    ferromic_inputs["sample_to_group"],
+                    ferromic_inputs["region"],
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.wc_fst",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -967,18 +1018,28 @@ def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_weir_inputs(scale_label)
         ferromic_details = details or f"{g.shape[0]}x{g.shape[2]}"
-        populations = ferromic_inputs["populations"]
-        benchmark_call(
-            "ferromic.hudson_fst",
-            scale_label,
-            lambda: ferromic.hudson_fst(populations[0], populations[1]),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            populations = ferromic_inputs["populations"]
+            benchmark_call(
+                "ferromic.hudson_fst",
+                scale_label,
+                lambda: ferromic.hudson_fst(populations[0], populations[1]),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.hudson_fst",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1001,22 +1062,32 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_weir_inputs(scale_label)
         ferromic_details = details
-        benchmark_call(
-            "ferromic.wc_fst_average",
-            scale_label,
-            lambda: ferromic.wc_fst(
-                ferromic_inputs["variants"],
-                ferromic_inputs["sample_names"],
-                ferromic_inputs["sample_to_group"],
-                ferromic_inputs["region"],
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            benchmark_call(
+                "ferromic.wc_fst_average",
+                scale_label,
+                lambda: ferromic.wc_fst(
+                    ferromic_inputs["variants"],
+                    ferromic_inputs["sample_names"],
+                    ferromic_inputs["sample_to_group"],
+                    ferromic_inputs["region"],
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.wc_fst_average",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1043,19 +1114,29 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_weir_inputs(scale_label)
         ferromic_details = details or f"{g.shape[0]}x{g.shape[2]} (blen={blen})"
-        populations = ferromic_inputs["populations"]
-        region = ferromic_inputs["region"]
-        benchmark_call(
-            "ferromic.hudson_fst_average",
-            scale_label,
-            lambda: ferromic.hudson_fst_with_sites(populations[0], populations[1], region),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            populations = ferromic_inputs["populations"]
+            region = ferromic_inputs["region"]
+            benchmark_call(
+                "ferromic.hudson_fst_average",
+                scale_label,
+                lambda: ferromic.hudson_fst_with_sites(populations[0], populations[1], region),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.hudson_fst_average",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1083,20 +1164,30 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
         ferromic_details = details
-        sample_count = len(ferromic_inputs["sample_names"])
-        benchmark_call(
-            "ferromic.pairwise_differences",
-            scale_label,
-            lambda: ferromic.pairwise_differences(
-                ferromic_inputs["variants"], sample_count
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+            sample_count = len(ferromic_inputs["sample_names"])
+            benchmark_call(
+                "ferromic.pairwise_differences",
+                scale_label,
+                lambda: ferromic.pairwise_differences(
+                    ferromic_inputs["variants"], sample_count
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.pairwise_differences",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result
 
@@ -1127,41 +1218,51 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
         ferromic_details = details
-        sample_count = len(ferromic_inputs["sample_names"])
-        pop1_indices = set(range(0, sample_count // 2))
-        pop2_indices = set(range(sample_count // 2, sample_count))
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
 
-        def _ferromic_pairwise_between() -> float:
-            comparisons = ferromic.pairwise_differences(
-                ferromic_inputs["variants"], sample_count
+            ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+            sample_count = len(ferromic_inputs["sample_names"])
+            pop1_indices = set(range(0, sample_count // 2))
+            pop2_indices = set(range(sample_count // 2, sample_count))
+
+            def _ferromic_pairwise_between() -> float:
+                comparisons = ferromic.pairwise_differences(
+                    ferromic_inputs["variants"], sample_count
+                )
+                diff_total = 0.0
+                comparable_total = 0
+                for comparison in comparisons:
+                    if (
+                        comparison.sample_i in pop1_indices
+                        and comparison.sample_j in pop2_indices
+                    ) or (
+                        comparison.sample_i in pop2_indices
+                        and comparison.sample_j in pop1_indices
+                    ):
+                        diff_total += float(comparison.differences)
+                        comparable_total += int(comparison.comparable_sites)
+                if comparable_total == 0:
+                    return float("nan")
+                return diff_total / comparable_total
+
+            benchmark_call(
+                "ferromic.pairwise_differences_between",
+                scale_label,
+                _ferromic_pairwise_between,
+                details=ferromic_details,
+                library="ferromic",
             )
-            diff_total = 0.0
-            comparable_total = 0
-            for comparison in comparisons:
-                if (
-                    comparison.sample_i in pop1_indices
-                    and comparison.sample_j in pop2_indices
-                ) or (
-                    comparison.sample_i in pop2_indices
-                    and comparison.sample_j in pop1_indices
-                ):
-                    diff_total += float(comparison.differences)
-                    comparable_total += int(comparison.comparable_sites)
-            if comparable_total == 0:
-                return float("nan")
-            return diff_total / comparable_total
-
-        benchmark_call(
-            "ferromic.pairwise_differences_between",
-            scale_label,
-            _ferromic_pairwise_between,
-            details=ferromic_details,
-            library="ferromic",
-        )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.pairwise_differences_between",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result
 
@@ -1194,33 +1295,45 @@ def _sequence_divergence_cached(scale_label: str) -> float:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_haplotype_inputs(scale_label, include_missing_row=True)
         ferromic_details = details
-        sequence_length = ferromic_inputs["sequence_length"]
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
 
-        def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
-            haplotypes_spec = [(index, 0) for index in indices]
-            return {
-                "id": pop_id,
-                "haplotypes": haplotypes_spec,
-                "variants": ferromic_inputs["variants"],
-                "sequence_length": sequence_length,
-                "sample_names": ferromic_inputs["sample_names"],
-            }
+            ferromic_inputs = _ferromic_haplotype_inputs(
+                scale_label, include_missing_row=True
+            )
+            sequence_length = ferromic_inputs["sequence_length"]
 
-        mid = len(ferromic_inputs["sample_names"]) // 2
-        pop1 = _population("pop1", range(0, mid))
-        pop2 = _population("pop2", range(mid, len(ferromic_inputs["sample_names"])))
+            def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
+                haplotypes_spec = [(index, 0) for index in indices]
+                return {
+                    "id": pop_id,
+                    "haplotypes": haplotypes_spec,
+                    "variants": ferromic_inputs["variants"],
+                    "sequence_length": sequence_length,
+                    "sample_names": ferromic_inputs["sample_names"],
+                }
 
-        benchmark_call(
-            "ferromic.hudson_dxy",
-            scale_label,
-            lambda: ferromic.hudson_dxy(pop1, pop2),
-            details=ferromic_details,
-            library="ferromic",
-        )
+            mid = len(ferromic_inputs["sample_names"]) // 2
+            pop1 = _population("pop1", range(0, mid))
+            pop2 = _population("pop2", range(mid, len(ferromic_inputs["sample_names"])))
+
+            benchmark_call(
+                "ferromic.hudson_dxy",
+                scale_label,
+                lambda: ferromic.hudson_dxy(pop1, pop2),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.hudson_dxy",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1258,40 +1371,59 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_sequence_inputs(scale_label)
         ferromic_details = details
-        sequence_length = ferromic_inputs["sequence_length"]
-        sample_names = ferromic_inputs["sample_names"]
-        haplotypes = [
-            (sample_index, allele_index)
-            for sample_index in range(len(sample_names))
-            for allele_index in (0, 1)
-        ]
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
 
-        benchmark_call(
-            "ferromic.nucleotide_diversity",
-            scale_label,
-            lambda: ferromic.nucleotide_diversity(
-                ferromic_inputs["variants"], haplotypes, sequence_length
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+            ferromic_inputs = _ferromic_sequence_inputs(scale_label)
+            sequence_length = ferromic_inputs["sequence_length"]
+            sample_names = ferromic_inputs["sample_names"]
+            haplotypes = [
+                (sample_index, allele_index)
+                for sample_index in range(len(sample_names))
+                for allele_index in (0, 1)
+            ]
 
-        def _ferromic_theta() -> float:
-            seg_sites = ferromic.segregating_sites(ferromic_inputs["variants"])
-            sample_count = len(haplotypes)
-            return ferromic.watterson_theta(seg_sites, sample_count, sequence_length)
+            benchmark_call(
+                "ferromic.nucleotide_diversity",
+                scale_label,
+                lambda: ferromic.nucleotide_diversity(
+                    ferromic_inputs["variants"], haplotypes, sequence_length
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
 
-        benchmark_call(
-            "ferromic.watterson_theta",
-            scale_label,
-            _ferromic_theta,
-            details=ferromic_details,
-            library="ferromic",
-        )
+            def _ferromic_theta() -> float:
+                seg_sites = ferromic.segregating_sites(ferromic_inputs["variants"])
+                sample_count = len(haplotypes)
+                return ferromic.watterson_theta(
+                    seg_sites, sample_count, sequence_length
+                )
+
+            benchmark_call(
+                "ferromic.watterson_theta",
+                scale_label,
+                _ferromic_theta,
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.nucleotide_diversity",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.watterson_theta",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return pi, theta  # type: ignore[return-value]
 
@@ -1313,21 +1445,31 @@ def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_pca_inputs(scale_label)
         ferromic_details = details
-        benchmark_call(
-            "ferromic.chromosome_pca",
-            scale_label,
-            lambda: ferromic.chromosome_pca(
-                ferromic_inputs["variants"],
-                ferromic_inputs["sample_names"],
-                n_components=3,
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_pca_inputs(scale_label)
+            benchmark_call(
+                "ferromic.chromosome_pca",
+                scale_label,
+                lambda: ferromic.chromosome_pca(
+                    ferromic_inputs["variants"],
+                    ferromic_inputs["sample_names"],
+                    n_components=3,
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.chromosome_pca",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1349,21 +1491,31 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
         )
 
     if is_library_enabled("ferromic"):
-        import ferromic
-
-        ferromic_inputs = _ferromic_pca_inputs(scale_label)
         ferromic_details = details
-        benchmark_call(
-            "ferromic.chromosome_pca_randomized",
-            scale_label,
-            lambda: ferromic.chromosome_pca(
-                ferromic_inputs["variants"],
-                ferromic_inputs["sample_names"],
-                n_components=3,
-            ),
-            details=ferromic_details,
-            library="ferromic",
-        )
+        if _is_library_scale_enabled("ferromic", scale_label):
+            import ferromic
+
+            ferromic_inputs = _ferromic_pca_inputs(scale_label)
+            benchmark_call(
+                "ferromic.chromosome_pca_randomized",
+                scale_label,
+                lambda: ferromic.chromosome_pca(
+                    ferromic_inputs["variants"],
+                    ferromic_inputs["sample_names"],
+                    n_components=3,
+                ),
+                details=ferromic_details,
+                library="ferromic",
+            )
+        else:
+            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            _record_scale_skip(
+                library="ferromic",
+                category="ferromic.chromosome_pca_randomized",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason=reason,
+            )
 
     return result  # type: ignore[return-value]
 
@@ -1574,7 +1726,7 @@ def test_weir_cockerham_fst_components():
     np.testing.assert_allclose(b, expected_b, rtol=0, atol=1e-8)
     np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-8)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         g_large, subpops_large = _simulate_weir_genotypes(label)
         a_large, b_large, c_large = _weir_results_cached(label)
         assert a_large.shape[0] == g_large.shape[0]
@@ -1620,7 +1772,7 @@ def test_weir_cockerham_fst_variants_and_overall():
     fst_overall = np.sum(a) / (np.sum(a) + np.sum(b) + np.sum(c))
     np.testing.assert_allclose(fst_overall, -4.36809058868914e-17, rtol=0, atol=1e-24)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         a_large, b_large, c_large = _weir_results_cached(label)
         with np.errstate(divide="ignore", invalid="ignore"):
             fst_large = a_large / (a_large + b_large + c_large)
@@ -1668,7 +1820,7 @@ def test_average_weir_cockerham_fst_block_jackknife():
     np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_weir_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -1731,7 +1883,7 @@ def test_hudson_fst_examples():
     fst_average = np.sum(num) / np.sum(den)
     np.testing.assert_allclose(fst_average, 0.1428571428571429, rtol=0, atol=1e-12)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         num_large, den_large = _hudson_results_cached(label)
         assert num_large.shape == den_large.shape
         valid_mask = den_large > 0
@@ -1769,7 +1921,7 @@ def test_average_hudson_fst_block_jackknife():
     np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_hudson_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -1809,7 +1961,7 @@ def test_mean_pairwise_difference():
     expected_mpd = np.array([0.0, 0.5, 0.66666667, 0.5, 0.0, 0.83333333, 0.83333333, 1.0])
     np.testing.assert_allclose(mpd, expected_mpd, rtol=0, atol=1e-8)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         mpd_large = _mean_pairwise_difference_cached(label)
         assert mpd_large.ndim == 1
         assert mpd_large.size > 0
@@ -1858,7 +2010,7 @@ def test_sequence_diversity_and_watterson_theta():
     )
     np.testing.assert_allclose(theta_hat_w, 0.10557184750733138, rtol=0, atol=1e-12)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         pi_large, theta_large = _sequence_diversity_cached(label)
         assert pi_large >= 0
         assert theta_large >= 0
@@ -1910,7 +2062,7 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
     )
     np.testing.assert_allclose(dxy, 0.12096774193548387, rtol=0, atol=1e-12)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         mpd_between_large = _mean_pairwise_difference_between_cached(label)
         assert mpd_between_large.ndim == 1
         assert mpd_between_large.size > 0
@@ -1979,7 +2131,7 @@ def test_pca_example():
     expected_variance_ratio = np.array([0.78867513, 0.21132487])
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-8)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         coords_large, model_large = _pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
@@ -2013,7 +2165,7 @@ def test_randomized_pca_example():
     expected_variance_ratio = np.array([0.78867513, 0.21132487])
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-6)
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         coords_large, model_large = _randomized_pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
@@ -2023,7 +2175,7 @@ def test_randomized_pca_example():
 def test_ferromic_weir_benchmarks():
     _skip_if_library_disabled("ferromic")
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         _weir_results_cached(label)
         _average_weir_results_cached(label)
 
@@ -2031,7 +2183,7 @@ def test_ferromic_weir_benchmarks():
 def test_ferromic_hudson_benchmarks():
     _skip_if_library_disabled("ferromic")
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         _hudson_results_cached(label)
         _average_hudson_results_cached(label)
 
@@ -2039,7 +2191,7 @@ def test_ferromic_hudson_benchmarks():
 def test_ferromic_sequence_benchmarks():
     _skip_if_library_disabled("ferromic")
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         _sequence_divergence_cached(label)
         _sequence_diversity_cached(label)
 
@@ -2047,7 +2199,7 @@ def test_ferromic_sequence_benchmarks():
 def test_ferromic_pairwise_benchmarks():
     _skip_if_library_disabled("ferromic")
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         _mean_pairwise_difference_cached(label)
         _mean_pairwise_difference_between_cached(label)
 
@@ -2055,7 +2207,7 @@ def test_ferromic_pairwise_benchmarks():
 def test_ferromic_pca_benchmarks():
     _skip_if_library_disabled("ferromic")
 
-    for label in LARGE_SCALE_LABELS:
+    for label in _enabled_scale_labels():
         _pca_results_cached(label)
         _randomized_pca_results_cached(label)
 
