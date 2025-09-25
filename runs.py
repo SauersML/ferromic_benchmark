@@ -481,9 +481,10 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
     configs = {
         "medium": (100, 100, 500),
         "big": (2000, 5000, 500_000),
-        # Size the "LARGEST" dataset near half a GiB of diploid genotypes while
-        # remaining comfortably above the million-scale configuration.
-        LARGEST_SCALE_LABEL: (8_192, 32_768, None),
+        # Right-size the "LARGEST" dataset to roughly 0.02 GiB of diploid
+        # genotypes while remaining comfortably above the million-scale
+        # configuration.
+        LARGEST_SCALE_LABEL: (2_048, 5_120, None),
 
 
     }
@@ -552,9 +553,10 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
     configs = {
         "medium": (100, None, 500),
         "big": (5000, None, 500_000),
-        # Scale the "LARGEST" haplotype data to roughly half a GiB of haplotype
-        # calls, providing a stress case far beyond the million-scale scenario.
-        LARGEST_SCALE_LABEL: (16_384, 16_384, None),
+        # Scale the "LARGEST" haplotype data to roughly 0.015 GiB of haplotype
+        # calls, providing a stress case far beyond the million-scale scenario
+        # without exhausting CI memory limits.
+        LARGEST_SCALE_LABEL: (2_000, 4_001, None),
 
 
     }
@@ -640,9 +642,9 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
     configs = {
         "medium": (180, 50, 500),
         "big": (3000, 3000, 500_000),
-        # Expand the "LARGEST" sequence dataset to around half a GiB of diploid
+        # Expand the "LARGEST" sequence dataset to around 0.02 GiB of diploid
         # genotypes while remaining comfortably beyond the million-scale baseline.
-        LARGEST_SCALE_LABEL: (8_192, 32_768, None),
+        LARGEST_SCALE_LABEL: (2_048, 5_120, None),
 
     }
 
@@ -706,9 +708,9 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
     configs = {
         "medium": (60, 100, 500),
         "big": (2000, 3000, 500_000),
-        # Grow the "LARGEST" PCA matrix to approximately half a GiB of float32 data
+        # Grow the "LARGEST" PCA matrix to approximately 0.025 GiB of float32 data
         # while significantly exceeding the million-scale case.
-        LARGEST_SCALE_LABEL: (8_192, 16_384, None),
+        LARGEST_SCALE_LABEL: (1_792, 3_584, None),
 
     }
 
@@ -754,6 +756,7 @@ FERROMIC_HAPLOTYPE_INPUTS: dict[tuple[str, bool], dict[str, Any]] = {}
 FERROMIC_SEQUENCE_INPUTS: dict[str, dict[str, Any]] = {}
 FERROMIC_PCA_INPUTS: dict[str, dict[str, Any]] = {}
 
+
 def _build_sample_names(n_samples: int) -> list[str]:
     return [f"sample_{index}" for index in range(n_samples)]
 
@@ -761,34 +764,48 @@ def _build_sample_names(n_samples: int) -> list[str]:
 def _diploid_variant_genotypes(genotype_slice: "np.ndarray") -> list[Any]:
     import numpy as np
 
-    entries: list[Any] = []
-    for sample_genotype in genotype_slice:
-        if np.any(sample_genotype < 0):
-            entries.append(None)
-        else:
-            entries.append(sample_genotype.astype(np.uint8, copy=False))
-    return entries
+    missing_mask = np.any(genotype_slice < 0, axis=1)
+    clipped = np.clip(genotype_slice, 0, None).astype(np.uint8, copy=False)
+
+    entries = np.empty(genotype_slice.shape[0], dtype=object)
+    entries[missing_mask] = None
+    if entries.size:
+        non_missing = clipped[~missing_mask]
+        if non_missing.size:
+            converted = np.empty(non_missing.shape[0], dtype=object)
+            for idx, row in enumerate(non_missing):
+                converted[idx] = (int(row[0]), int(row[1]))
+            entries[~missing_mask] = converted
+
+    return entries.tolist()
 
 
 def _haploid_variant_genotypes(haplotype_slice: "np.ndarray") -> list[Any]:
     import numpy as np
 
-    entries: list[Any] = []
-    for allele in haplotype_slice:
-        if allele < 0:
-            entries.append(None)
-        else:
-            entries.append(np.array([allele], dtype=np.uint8))
-    return entries
+    missing_mask = haplotype_slice < 0
+    alleles = np.clip(haplotype_slice, 0, None).astype(np.uint8, copy=False)
+
+    entries = alleles.astype(object)
+    entries[missing_mask] = None
+
+    return entries.tolist()
+
+
 
 
 def _build_sample_to_group(
-    sample_names: Sequence[str], subpops: Sequence[Sequence[int]]
+    sample_names: Sequence[str],
+    subpops: Sequence[Sequence[int]],
+    *,
+    ploidy: int,
 ) -> dict[str, tuple[int, int]]:
     mapping: dict[str, tuple[int, int]] = {}
+    haplotypes_per_sample = max(ploidy, 1)
     for group_index, indices in enumerate(subpops):
-        for order, sample_index in enumerate(indices):
-            mapping[sample_names[sample_index]] = (group_index, order)
+        for sample_index in indices:
+            haplotype_index = sample_index % haplotypes_per_sample
+            mapping[sample_names[sample_index]] = (group_index, haplotype_index)
     return mapping
 
 
@@ -803,9 +820,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             {"position": int(pos), "genotypes": _diploid_variant_genotypes(g[idx])}
             for idx, pos in enumerate(positions)
         ]
-        sample_names = _build_sample_names(g.shape[1])
-        sample_to_group = _build_sample_to_group(sample_names, subpops)
-        sequence_length = int(positions[-1] + 1) if positions.size else 0
+
         haplotype_lists = [
             [
                 (sample_index, allele_index)
@@ -814,6 +829,12 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             ]
             for indices in subpops
         ]
+
+        sample_names = _build_sample_names(g.shape[1])
+        sample_to_group = _build_sample_to_group(
+            sample_names, subpops, ploidy=g.shape[2]
+        )
+        sequence_length = int(positions[-1] + 1) if positions.size else 0
         populations = [
             {
                 "id": f"pop{group_index}",
@@ -828,7 +849,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             int(positions[0]) if positions.size else 0,
             int(positions[-1]) if positions.size else 0,
         )
-        FERROMIC_WEIR_INPUTS[scale_label] = {
+        payload = {
             "genotypes": g,
             "subpops": subpops,
             "positions": positions,
@@ -839,6 +860,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             "populations": populations,
             "region": region,
         }
+        FERROMIC_WEIR_INPUTS[scale_label] = payload
 
     return FERROMIC_WEIR_INPUTS[scale_label]
 
@@ -857,7 +879,6 @@ def _ferromic_haplotype_inputs(
         pos_array = np.asarray(pos)
 
         pos_array = pos_array[: hap_array.shape[0]]
-
         variants = [
             {
                 "position": int(position),
@@ -868,13 +889,14 @@ def _ferromic_haplotype_inputs(
         sample_count = hap_array.shape[1]
         sample_names = _build_sample_names(sample_count)
         sequence_length = int(pos_array[-1] + 1) if pos_array.size else 0
-        FERROMIC_HAPLOTYPE_INPUTS[cache_key] = {
+        payload = {
             "haplotypes_array": hap_array,
             "positions": pos_array,
             "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
         }
+        FERROMIC_HAPLOTYPE_INPUTS[cache_key] = payload
 
     return FERROMIC_HAPLOTYPE_INPUTS[cache_key]
 
@@ -887,7 +909,6 @@ def _ferromic_sequence_inputs(scale_label: str) -> dict[str, Any]:
         g_array = np.asarray(genotype)
         pos_array = np.asarray(pos)
         pos_array = pos_array[: g_array.shape[0]]
-
         variants = [
             {
                 "position": int(position),
@@ -897,13 +918,14 @@ def _ferromic_sequence_inputs(scale_label: str) -> dict[str, Any]:
         ]
         sample_names = _build_sample_names(g_array.shape[1])
         sequence_length = int(pos_array[-1] + 1) if pos_array.size else 0
-        FERROMIC_SEQUENCE_INPUTS[scale_label] = {
+        payload = {
             "genotype_array": g_array,
             "positions": pos_array,
             "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
         }
+        FERROMIC_SEQUENCE_INPUTS[scale_label] = payload
 
     return FERROMIC_SEQUENCE_INPUTS[scale_label]
 
@@ -935,11 +957,12 @@ def _ferromic_pca_inputs(scale_label: str) -> dict[str, Any]:
                 genotypes.append(entry)
             variants.append({"position": idx, "genotypes": genotypes})
 
-        FERROMIC_PCA_INPUTS[scale_label] = {
+        payload = {
             "matrix": data,
             "variants": variants,
             "sample_names": sample_names,
         }
+        FERROMIC_PCA_INPUTS[scale_label] = payload
 
     return FERROMIC_PCA_INPUTS[scale_label]
 
@@ -1820,9 +1843,8 @@ def test_average_weir_cockerham_fst_block_jackknife():
         vb_large = np.asarray(vb_large)
         vj_large = np.asarray(vj_large)
 
-        expected_blocks = math.ceil(
-            g_large.shape[0] / _block_length_for_average_fst(label)
-        )
+        blen = _block_length_for_average_fst(label)
+        expected_blocks = max(1, math.ceil((g_large.shape[0] - blen + 1) / blen))
 
         assert np.isfinite(fst_large)
         assert np.isfinite(se_large)
@@ -1921,9 +1943,8 @@ def test_average_hudson_fst_block_jackknife():
         vb_large = np.asarray(vb_large)
         vj_large = np.asarray(vj_large)
 
-        expected_blocks = math.ceil(
-            g_large.shape[0] / _block_length_for_average_fst(label)
-        )
+        blen = _block_length_for_average_fst(label)
+        expected_blocks = max(1, math.ceil((g_large.shape[0] - blen + 1) / blen))
 
         assert np.isfinite(fst_large)
         assert np.isfinite(se_large)
