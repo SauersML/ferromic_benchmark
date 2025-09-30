@@ -562,12 +562,12 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
 
     configs = {
         "medium": (100, 100, 500),
-        "big": (1_600, 6_250, 500_000),
-        # Right-size the "LARGEST" datasets to roughly 0.02 GiB of diploid
+        "big": (800, 5_000, 200_000),
+        # Right-size the "LARGEST" datasets to roughly 0.008 GiB of diploid
         # genotypes while remaining comfortably above the million-scale
         # configuration and exploring different aspect ratios.
-        LARGEST_SCALE_LABEL: (1_024, 10_500, None),
-        LARGEST_WIDE_SCALE_LABEL: (768, 14_000, None),
+        LARGEST_SCALE_LABEL: (704, 6_000, None),
+        LARGEST_WIDE_SCALE_LABEL: (640, 6_400, None),
 
 
     }
@@ -649,13 +649,13 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
 
     configs = {
         "medium": (100, None, 500),
-        "big": (8_000, None, 500_000),
-        # Scale the "LARGEST" haplotype data to roughly 0.015 GiB of haplotype
-        # calls (about 0.017 GiB when the synthetic all-missing row is included),
+        "big": (6_000, None, 225_000),
+        # Scale the "LARGEST" haplotype data to roughly 0.010 GiB of haplotype
+        # calls (about 0.011 GiB when the synthetic all-missing row is included),
         # providing a stress case far beyond the million-scale scenario without
         # exhausting CI memory limits while covering diverse aspect ratios.
-        LARGEST_SCALE_LABEL: (6_000, 1_500, None),
-        LARGEST_WIDE_SCALE_LABEL: (8_000, 1_200, None),
+        LARGEST_SCALE_LABEL: (5_400, 900, None),
+        LARGEST_WIDE_SCALE_LABEL: (6_300, 840, None),
 
 
     }
@@ -745,12 +745,12 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
 
     configs = {
         "medium": (180, 50, 500),
-        "big": (1_500, 6_000, 500_000),
-        # Expand the "LARGEST" sequence dataset to around 0.02 GiB of diploid
+        "big": (900, 4_200, 210_000),
+        # Expand the "LARGEST" sequence dataset to around 0.007 GiB of diploid
         # genotypes while remaining comfortably beyond the million-scale baseline
         # and sampling multiple aspect ratios.
-        LARGEST_SCALE_LABEL: (1_024, 10_800, None),
-        LARGEST_WIDE_SCALE_LABEL: (768, 14_400, None),
+        LARGEST_SCALE_LABEL: (720, 5_400, None),
+        LARGEST_WIDE_SCALE_LABEL: (624, 6_240, None),
 
     }
 
@@ -827,12 +827,12 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
 
     configs = {
         "medium": (60, 100, 500),
-        "big": (1_200, 5_000, 500_000),
-        # Grow the "LARGEST" PCA matrices to approximately 0.025 GiB of float32
+        "big": (720, 3_600, 216_000),
+        # Grow the "LARGEST" PCA matrices to approximately 0.010 GiB of float32
         # data while significantly exceeding the million-scale case and sampling
         # multiple aspect ratios.
-        LARGEST_SCALE_LABEL: (768, 8_640, None),
-        LARGEST_WIDE_SCALE_LABEL: (576, 11_520, None),
+        LARGEST_SCALE_LABEL: (576, 4_800, None),
+        LARGEST_WIDE_SCALE_LABEL: (512, 5_400, None),
 
     }
 
