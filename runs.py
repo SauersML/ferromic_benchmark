@@ -184,7 +184,11 @@ def _write_benchmark_results_tsv() -> None:
 
 LARGEST_SCALE_LABEL = "LARGEST"
 LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
-LARGEST_SCALE_REASON = "requires significant CPU/RAM/disk resources"
+LARGEST_SCALE_ENV_VAR = "RUN_LARGEST_SCALE"
+LARGEST_SCALE_REASON = (
+    "requires significant CPU/RAM/disk resources; set "
+    f"{LARGEST_SCALE_ENV_VAR}=1 to enable"
+)
 FERROMIC_BIG_ENV_VAR = "RUN_FERROMIC_BIG_SCALE"
 FERROMIC_BIG_REASON = "requires enabling RUN_FERROMIC_BIG_SCALE=1 due to ferromic runtime"
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
@@ -232,7 +236,14 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
-    return True
+    if scale_label != LARGEST_SCALE_LABEL:
+        return True
+
+    value = os.environ.get(LARGEST_SCALE_ENV_VAR, "").strip().lower()
+    if not value:
+        return False
+
+    return value in {"1", "true", "yes", "on"}
 
 
 def _ensure_scale_enabled(scale_label: str) -> None:
@@ -281,6 +292,30 @@ def _record_scale_skip(
             skipped=True,
         )
     )
+
+
+def _maybe_call(value: Any) -> Any:
+    """Return ``value()`` when callable, otherwise ``value``."""
+
+    return value() if callable(value) else value
+
+
+def _ferromic_sample_names(population: Any) -> Sequence[str]:
+    """Access sample names from ``ferromic`` populations across API versions."""
+
+    sample_names = _maybe_call(getattr(population, "sample_names"))
+    if not hasattr(sample_names, "__len__"):
+        sample_names = list(sample_names)
+    return sample_names
+
+
+def _ferromic_haplotypes(population: Any) -> Sequence[Any]:
+    """Access haplotypes from ``ferromic`` populations across API versions."""
+
+    haplotypes = _maybe_call(getattr(population, "haplotypes"))
+    if not hasattr(haplotypes, "__len__"):
+        haplotypes = list(haplotypes)
+    return haplotypes
 
 
 def _memmap_path(name: str, shape: Sequence[int], dtype_str: str) -> Path:
@@ -1343,7 +1378,7 @@ def _sequence_divergence_cached(scale_label: str) -> float:
                 scale_label, include_missing_row=True
             )
             base_population = ferromic_inputs["population"]
-            sample_total = len(base_population.sample_names())
+            sample_total = len(_ferromic_sample_names(base_population))
             mid = sample_total // 2
             pop1 = base_population.with_haplotypes(
                 "pop1", [(index, 0) for index in range(0, mid)]
@@ -1422,7 +1457,7 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
 
             def _ferromic_theta() -> float:
                 seg_sites = population.segregating_sites()
-                sample_count = len(population.haplotypes())
+                sample_count = len(_ferromic_haplotypes(population))
                 return ferromic.watterson_theta(
                     seg_sites, sample_count, population.sequence_length
                 )
