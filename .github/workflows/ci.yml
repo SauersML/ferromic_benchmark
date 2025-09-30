@@ -26,6 +26,8 @@ jobs:
 
       - name: Purge pip cache
         run: python -m pip cache purge
+        env:
+          PIP_NO_CACHE_DIR: "0"
 
       - name: Install dependencies
         run: |
