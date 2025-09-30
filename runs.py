@@ -812,6 +812,8 @@ def _build_sample_to_group(
 def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
     import numpy as np
 
+    import ferromic
+
     if scale_label not in FERROMIC_WEIR_INPUTS:
         g, subpops = _simulate_weir_genotypes(scale_label)
         positions = np.arange(g.shape[0], dtype=np.int64)
@@ -835,14 +837,21 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             sample_names, subpops, ploidy=g.shape[2]
         )
         sequence_length = int(positions[-1] + 1) if positions.size else 0
+        haplotypes_all = [
+            (sample_index, allele_index)
+            for sample_index in range(g.shape[1])
+            for allele_index in range(g.shape[2])
+        ]
+        population_all = ferromic.Population.from_numpy(
+            "all_samples",
+            g,
+            positions,
+            haplotypes_all,
+            sequence_length,
+            sample_names=sample_names,
+        )
         populations = [
-            {
-                "id": f"pop{group_index}",
-                "haplotypes": haplotypes,
-                "variants": variants,
-                "sequence_length": sequence_length,
-                "sample_names": sample_names,
-            }
+            population_all.with_haplotypes(f"pop{group_index}", haplotypes)
             for group_index, haplotypes in enumerate(haplotype_lists)
         ]
         region = (
@@ -859,6 +868,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             "sequence_length": sequence_length,
             "populations": populations,
             "region": region,
+            "population": population_all,
         }
         FERROMIC_WEIR_INPUTS[scale_label] = payload
 
@@ -869,6 +879,8 @@ def _ferromic_haplotype_inputs(
     scale_label: str, *, include_missing_row: bool = False
 ) -> dict[str, Any]:
     import numpy as np
+
+    import ferromic
 
     cache_key = (scale_label, include_missing_row)
     if cache_key not in FERROMIC_HAPLOTYPE_INPUTS:
@@ -889,12 +901,23 @@ def _ferromic_haplotype_inputs(
         sample_count = hap_array.shape[1]
         sample_names = _build_sample_names(sample_count)
         sequence_length = int(pos_array[-1] + 1) if pos_array.size else 0
+        haplotypes_all = [(index, 0) for index in range(sample_count)]
+        hap_cube = hap_array[:, :, np.newaxis]
+        population = ferromic.Population.from_numpy(
+            "haplotypes",
+            hap_cube,
+            pos_array,
+            haplotypes_all,
+            sequence_length,
+            sample_names=sample_names,
+        )
         payload = {
             "haplotypes_array": hap_array,
             "positions": pos_array,
             "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
+            "population": population,
         }
         FERROMIC_HAPLOTYPE_INPUTS[cache_key] = payload
 
@@ -904,26 +927,34 @@ def _ferromic_haplotype_inputs(
 def _ferromic_sequence_inputs(scale_label: str) -> dict[str, Any]:
     import numpy as np
 
+    import ferromic
+
     if scale_label not in FERROMIC_SEQUENCE_INPUTS:
         genotype, pos = _simulate_sequence_genotypes(scale_label)
         g_array = np.asarray(genotype)
         pos_array = np.asarray(pos)
         pos_array = pos_array[: g_array.shape[0]]
-        variants = [
-            {
-                "position": int(position),
-                "genotypes": _diploid_variant_genotypes(g_array[idx]),
-            }
-            for idx, position in enumerate(pos_array)
-        ]
         sample_names = _build_sample_names(g_array.shape[1])
         sequence_length = int(pos_array[-1] + 1) if pos_array.size else 0
+        haplotypes_all = [
+            (sample_index, allele_index)
+            for sample_index in range(g_array.shape[1])
+            for allele_index in range(g_array.shape[2])
+        ]
+        population = ferromic.Population.from_numpy(
+            "sequence",
+            g_array,
+            pos_array,
+            haplotypes_all,
+            sequence_length,
+            sample_names=sample_names,
+        )
         payload = {
             "genotype_array": g_array,
             "positions": pos_array,
-            "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
+            "population": population,
         }
         FERROMIC_SEQUENCE_INPUTS[scale_label] = payload
 
@@ -935,31 +966,23 @@ def _ferromic_pca_inputs(scale_label: str) -> dict[str, Any]:
 
     if scale_label not in FERROMIC_PCA_INPUTS:
         matrix = _simulate_pca_matrix(scale_label)
-        data = np.asarray(matrix)
+        data = np.asarray(matrix, dtype=np.float64)
 
         sample_names = _build_sample_names(data.shape[1])
-
-        def _allele_pair(count: float) -> Any:
-            if math.isnan(count):
-                return None
-            rounded = int(round(float(count)))
-            if rounded <= 0:
-                return np.array([0, 0], dtype=np.uint8)
-            if rounded == 1:
-                return np.array([0, 1], dtype=np.uint8)
-            return np.array([1, 1], dtype=np.uint8)
-
-        variants = []
-        for idx in range(data.shape[0]):
-            genotypes = []
-            for value in data[idx]:
-                entry = _allele_pair(value)
-                genotypes.append(entry)
-            variants.append({"position": idx, "genotypes": genotypes})
+        allele_lookup = np.array([[0, 0], [0, 1], [1, 1]], dtype=np.int16)
+        rounded = np.clip(np.rint(data), 0, 2).astype(np.intp)
+        genotype_cube = allele_lookup[rounded]
+        mask = np.isnan(data)
+        if mask.any():
+            genotype_cube = genotype_cube.copy()
+            genotype_cube[mask] = -1
+        genotype_cube = genotype_cube.astype(np.int16, copy=False)
+        positions = np.arange(data.shape[0], dtype=np.int64)
+        dense_variants = {"genotypes": genotype_cube, "positions": positions}
 
         payload = {
             "matrix": data,
-            "variants": variants,
+            "dense_variants": dense_variants,
             "sample_names": sample_names,
         }
         FERROMIC_PCA_INPUTS[scale_label] = payload
@@ -1319,21 +1342,15 @@ def _sequence_divergence_cached(scale_label: str) -> float:
             ferromic_inputs = _ferromic_haplotype_inputs(
                 scale_label, include_missing_row=True
             )
-            sequence_length = ferromic_inputs["sequence_length"]
-
-            def _population(pop_id: str, indices: Sequence[int]) -> dict[str, Any]:
-                haplotypes_spec = [(index, 0) for index in indices]
-                return {
-                    "id": pop_id,
-                    "haplotypes": haplotypes_spec,
-                    "variants": ferromic_inputs["variants"],
-                    "sequence_length": sequence_length,
-                    "sample_names": ferromic_inputs["sample_names"],
-                }
-
-            mid = len(ferromic_inputs["sample_names"]) // 2
-            pop1 = _population("pop1", range(0, mid))
-            pop2 = _population("pop2", range(mid, len(ferromic_inputs["sample_names"])))
+            base_population = ferromic_inputs["population"]
+            sample_total = len(base_population.sample_names())
+            mid = sample_total // 2
+            pop1 = base_population.with_haplotypes(
+                "pop1", [(index, 0) for index in range(0, mid)]
+            )
+            pop2 = base_population.with_haplotypes(
+                "pop2", [(index, 0) for index in range(mid, sample_total)]
+            )
 
             benchmark_call(
                 "ferromic.hudson_dxy",
@@ -1393,29 +1410,21 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
             import ferromic
 
             ferromic_inputs = _ferromic_sequence_inputs(scale_label)
-            sequence_length = ferromic_inputs["sequence_length"]
-            sample_names = ferromic_inputs["sample_names"]
-            haplotypes = [
-                (sample_index, allele_index)
-                for sample_index in range(len(sample_names))
-                for allele_index in (0, 1)
-            ]
+            population = ferromic_inputs["population"]
 
             benchmark_call(
                 "ferromic.nucleotide_diversity",
                 scale_label,
-                lambda: ferromic.nucleotide_diversity(
-                    ferromic_inputs["variants"], haplotypes, sequence_length
-                ),
+                lambda: population.nucleotide_diversity(),
                 details=ferromic_details,
                 library="ferromic",
             )
 
             def _ferromic_theta() -> float:
-                seg_sites = ferromic.segregating_sites(ferromic_inputs["variants"])
-                sample_count = len(haplotypes)
+                seg_sites = population.segregating_sites()
+                sample_count = len(population.haplotypes())
                 return ferromic.watterson_theta(
-                    seg_sites, sample_count, sequence_length
+                    seg_sites, sample_count, population.sequence_length
                 )
 
             benchmark_call(
@@ -1471,7 +1480,7 @@ def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
                 "ferromic.chromosome_pca",
                 scale_label,
                 lambda: ferromic.chromosome_pca(
-                    ferromic_inputs["variants"],
+                    ferromic_inputs["dense_variants"],
                     ferromic_inputs["sample_names"],
                     n_components=3,
                 ),
@@ -1517,7 +1526,7 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
                 "ferromic.chromosome_pca_randomized",
                 scale_label,
                 lambda: ferromic.chromosome_pca(
-                    ferromic_inputs["variants"],
+                    ferromic_inputs["dense_variants"],
                     ferromic_inputs["sample_names"],
                     n_components=3,
                 ),
@@ -1548,10 +1557,11 @@ def ensure_dependencies_installed(libraries: Sequence[str]) -> None:
     if "scikit-allel" in requested:
         packages.append("scikit-allel")
 
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", *packages],
-        check=True,
-    )
+    if packages:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", *packages],
+            check=True,
+        )
 
 
 def benchmark_call(
