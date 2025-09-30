@@ -232,6 +232,13 @@ def _requires_ferromic_opt_in(scale_label: str) -> bool:
     return _scale_family(scale_label) == "big"
 
 
+def _is_ferromic_big_scale_enabled() -> bool:
+    value = os.environ.get(FERROMIC_BIG_ENV_VAR, "").strip().lower()
+    if not value:
+        return False
+    return value in {"1", "true", "yes", "on"}
+
+
 def _scale_skip_reason(scale_label: str) -> str:
     family = _scale_family(scale_label)
     if family == "big":
@@ -292,12 +299,21 @@ def _is_library_scale_enabled(library: str, scale_label: str) -> bool:
     if not _is_scale_enabled(scale_label):
         return False
     normalized = _normalize_library_name(library)
-    if normalized == "ferromic" and _requires_ferromic_opt_in(scale_label):
-        value = os.environ.get(FERROMIC_BIG_ENV_VAR, "").strip().lower()
-        if not value:
-            return False
-        return value in {"1", "true", "yes", "on"}
+    if _requires_ferromic_opt_in(scale_label):
+        if normalized == "ferromic":
+            return _is_ferromic_big_scale_enabled()
+        if normalized == "scikit-allel" and "ferromic" in ENABLED_LIBRARIES:
+            return _is_ferromic_big_scale_enabled()
     return True
+
+
+def _enabled_scale_labels_for_library(library: str) -> tuple[str, ...]:
+    normalized = _normalize_library_name(library)
+    return tuple(
+        label
+        for label in _enabled_scale_labels()
+        if _is_library_scale_enabled(normalized, label)
+    )
 
 
 def _record_scale_skip(
@@ -1121,7 +1137,9 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
     details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]}"
     result: tuple[Any, Any, Any] | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         result = benchmark_call(
@@ -1168,7 +1186,9 @@ def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
     result: tuple[Any, Any] | None = None
     details: str | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         g_array = allel.GenotypeArray(g)
@@ -1216,7 +1236,9 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
     details = f"{g.shape[0]}x{g.shape[1]}x{g.shape[2]} (blen={blen})"
     result: tuple[float, float, Any, Any] | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         result = benchmark_call(
@@ -1264,7 +1286,9 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
     result: tuple[float, float, Any, Any] | None = None
     details: str | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         g_array = allel.GenotypeArray(g)
@@ -1315,7 +1339,9 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
     details = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
     result: Any = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         hap_object = allel.HaplotypeArray(hap_array)
@@ -1367,7 +1393,9 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
     details = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
     result: Any = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         hap_object = allel.HaplotypeArray(hap_array)
@@ -1442,7 +1470,9 @@ def _sequence_divergence_cached(scale_label: str) -> float:
     details: str | None = f"{hap_array.shape[0]}x{hap_array.shape[1]}"
     result: float | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         hap_object = allel.HaplotypeArray(hap_array)
@@ -1509,7 +1539,9 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
     pi: float | None = None
     theta: float | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         g_object = allel.GenotypeArray(geno_array)
@@ -1585,7 +1617,9 @@ def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
     details = f"{gn.shape[0]}x{gn.shape[1]}"
     result: tuple[Any, Any] | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         result = benchmark_call(
@@ -1631,7 +1665,9 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
     details = f"{gn.shape[0]}x{gn.shape[1]}"
     result: tuple[Any, Any] | None = None
 
-    if is_library_enabled("scikit-allel"):
+    if is_library_enabled("scikit-allel") and _is_library_scale_enabled(
+        "scikit-allel", scale_label
+    ):
         import allel
 
         result = benchmark_call(
@@ -1791,7 +1827,12 @@ def _validate_paired_benchmarks() -> None:
     missing: dict[str, set[str]] = {}
     for label in scale_labels:
         libs_present = executed.get(label, set())
-        missing_libs = required_libraries - libs_present
+        expected_libs = {
+            library
+            for library in required_libraries
+            if _is_library_scale_enabled(library, label)
+        }
+        missing_libs = expected_libs - libs_present
         if missing_libs:
             missing[label] = missing_libs
 
@@ -1910,7 +1951,7 @@ def test_weir_cockerham_fst_components():
     np.testing.assert_allclose(b, expected_b, rtol=0, atol=1e-8)
     np.testing.assert_allclose(c, expected_c, rtol=0, atol=1e-8)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         g_large, subpops_large = _simulate_weir_genotypes(label)
         a_large, b_large, c_large = _weir_results_cached(label)
         assert a_large.shape[0] == g_large.shape[0]
@@ -1956,7 +1997,7 @@ def test_weir_cockerham_fst_variants_and_overall():
     fst_overall = np.sum(a) / (np.sum(a) + np.sum(b) + np.sum(c))
     np.testing.assert_allclose(fst_overall, -4.36809058868914e-17, rtol=0, atol=1e-24)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         a_large, b_large, c_large = _weir_results_cached(label)
         with np.errstate(divide="ignore", invalid="ignore"):
             fst_large = a_large / (a_large + b_large + c_large)
@@ -2004,7 +2045,7 @@ def test_average_weir_cockerham_fst_block_jackknife():
     np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_weir_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -2066,7 +2107,7 @@ def test_hudson_fst_examples():
     fst_average = np.sum(num) / np.sum(den)
     np.testing.assert_allclose(fst_average, 0.1428571428571429, rtol=0, atol=1e-12)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         num_large, den_large = _hudson_results_cached(label)
         assert num_large.shape == den_large.shape
         valid_mask = den_large > 0
@@ -2104,7 +2145,7 @@ def test_average_hudson_fst_block_jackknife():
     np.testing.assert_allclose(vb, expected_vb, rtol=0, atol=1e-12)
     np.testing.assert_allclose(vj, expected_vj, rtol=0, atol=1e-12)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         g_large, _ = _simulate_weir_genotypes(label)
         fst_large, se_large, vb_large, vj_large = _average_hudson_results_cached(label)
         vb_large = np.asarray(vb_large)
@@ -2143,7 +2184,7 @@ def test_mean_pairwise_difference():
     expected_mpd = np.array([0.0, 0.5, 0.66666667, 0.5, 0.0, 0.83333333, 0.83333333, 1.0])
     np.testing.assert_allclose(mpd, expected_mpd, rtol=0, atol=1e-8)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         mpd_large = _mean_pairwise_difference_cached(label)
         assert mpd_large.ndim == 1
         assert mpd_large.size > 0
@@ -2192,7 +2233,7 @@ def test_sequence_diversity_and_watterson_theta():
     )
     np.testing.assert_allclose(theta_hat_w, 0.10557184750733138, rtol=0, atol=1e-12)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         pi_large, theta_large = _sequence_diversity_cached(label)
         assert pi_large >= 0
         assert theta_large >= 0
@@ -2244,7 +2285,7 @@ def test_mean_pairwise_difference_between_and_sequence_divergence():
     )
     np.testing.assert_allclose(dxy, 0.12096774193548387, rtol=0, atol=1e-12)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         mpd_between_large = _mean_pairwise_difference_between_cached(label)
         assert mpd_between_large.ndim == 1
         assert mpd_between_large.size > 0
@@ -2313,7 +2354,7 @@ def test_pca_example():
     expected_variance_ratio = np.array([0.78867513, 0.21132487])
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-8)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         coords_large, model_large = _pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
@@ -2347,7 +2388,7 @@ def test_randomized_pca_example():
     expected_variance_ratio = np.array([0.78867513, 0.21132487])
     np.testing.assert_allclose(model.explained_variance_ratio_, expected_variance_ratio, rtol=0, atol=1e-6)
 
-    for label in _enabled_scale_labels():
+    for label in _enabled_scale_labels_for_library("scikit-allel"):
         coords_large, model_large = _randomized_pca_results_cached(label)
         assert coords_large.shape[1] == 3
         assert model_large.explained_variance_ratio_.shape[0] == 3
