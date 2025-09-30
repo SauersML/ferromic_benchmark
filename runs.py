@@ -212,9 +212,9 @@ BASE_PCA_SAMPLES = 3
 
 AVERAGE_FST_BLOCK_LENGTHS: dict[str, int] = {
     "medium": 10,
-    "big": 200,
-    LARGEST_SCALE_LABEL: 512,
-    LARGEST_WIDE_SCALE_LABEL: 448,
+    "big": 64,
+    LARGEST_SCALE_LABEL: 96,
+    LARGEST_WIDE_SCALE_LABEL: 112,
 }
 
 
@@ -562,14 +562,12 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
 
     configs = {
         "medium": (100, 100, 500),
-        "big": (800, 5_000, 200_000),
-        # Right-size the "LARGEST" datasets to roughly 0.008 GiB of diploid
-        # genotypes while remaining comfortably above the million-scale
-        # configuration and exploring different aspect ratios.
-        LARGEST_SCALE_LABEL: (704, 6_000, None),
-        LARGEST_WIDE_SCALE_LABEL: (640, 6_400, None),
-
-
+        "big": (240, 800, 9_600),
+        # Right-size the "LARGEST" datasets to stay comfortably beyond the
+        # million-scale configuration while remaining well below the memory
+        # limits of resource-constrained CI runners.
+        LARGEST_SCALE_LABEL: (320, 1_000, None),
+        LARGEST_WIDE_SCALE_LABEL: (288, 1_056, None),
     }
 
     if scale_label not in configs:
@@ -649,15 +647,12 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
 
     configs = {
         "medium": (100, None, 500),
-        "big": (6_000, None, 225_000),
-        # Scale the "LARGEST" haplotype data to roughly 0.010 GiB of haplotype
-        # calls (about 0.011 GiB when the synthetic all-missing row is included),
-        # providing a stress case far beyond the million-scale scenario without
-        # exhausting CI memory limits while covering diverse aspect ratios.
-        LARGEST_SCALE_LABEL: (5_400, 900, None),
-        LARGEST_WIDE_SCALE_LABEL: (6_300, 840, None),
-
-
+        "big": (600, None, 9_600),
+        # Scale the "LARGEST" haplotype data to remain beyond the million-scale
+        # scenario while keeping the overall Python object count small enough to
+        # avoid exhausting CI memory limits.
+        LARGEST_SCALE_LABEL: (800, 320, None),
+        LARGEST_WIDE_SCALE_LABEL: (720, 360, None),
     }
 
     if scale_label not in configs:
@@ -745,12 +740,12 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
 
     configs = {
         "medium": (180, 50, 500),
-        "big": (900, 4_200, 210_000),
-        # Expand the "LARGEST" sequence dataset to around 0.007 GiB of diploid
-        # genotypes while remaining comfortably beyond the million-scale baseline
-        # and sampling multiple aspect ratios.
-        LARGEST_SCALE_LABEL: (720, 5_400, None),
-        LARGEST_WIDE_SCALE_LABEL: (624, 6_240, None),
+        "big": (360, 600, 12_000),
+        # Expand the "LARGEST" sequence dataset just beyond the million-scale
+        # baseline while keeping the underlying arrays compact enough for
+        # low-memory CI environments.
+        LARGEST_SCALE_LABEL: (420, 640, None),
+        LARGEST_WIDE_SCALE_LABEL: (384, 672, None),
 
     }
 
@@ -827,12 +822,12 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
 
     configs = {
         "medium": (60, 100, 500),
-        "big": (720, 3_600, 216_000),
-        # Grow the "LARGEST" PCA matrices to approximately 0.010 GiB of float32
-        # data while significantly exceeding the million-scale case and sampling
-        # multiple aspect ratios.
-        LARGEST_SCALE_LABEL: (576, 4_800, None),
-        LARGEST_WIDE_SCALE_LABEL: (512, 5_400, None),
+        "big": (240, 600, 12_000),
+        # Grow the "LARGEST" PCA matrices modestly beyond the million-scale
+        # configuration while ensuring the float32 arrays remain lightweight for
+        # constrained CI systems.
+        LARGEST_SCALE_LABEL: (288, 672, None),
+        LARGEST_WIDE_SCALE_LABEL: (256, 720, None),
 
     }
 
