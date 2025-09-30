@@ -183,7 +183,13 @@ def _write_benchmark_results_tsv() -> None:
 
 
 LARGEST_SCALE_LABEL = "LARGEST"
-LARGE_SCALE_LABELS = ("medium", "big", LARGEST_SCALE_LABEL)
+LARGEST_WIDE_SCALE_LABEL = f"{LARGEST_SCALE_LABEL}-wide"
+LARGE_SCALE_LABELS = (
+    "medium",
+    "big",
+    LARGEST_SCALE_LABEL,
+    LARGEST_WIDE_SCALE_LABEL,
+)
 LARGEST_SCALE_ENV_VAR = "RUN_LARGEST_SCALE"
 LARGEST_SCALE_REASON = (
     "requires significant CPU/RAM/disk resources; set "
@@ -208,7 +214,31 @@ AVERAGE_FST_BLOCK_LENGTHS: dict[str, int] = {
     "medium": 10,
     "big": 200,
     LARGEST_SCALE_LABEL: 512,
+    LARGEST_WIDE_SCALE_LABEL: 448,
 }
+
+
+def _scale_family(scale_label: str) -> str:
+    """Return the base family for the provided ``scale_label``."""
+
+    if scale_label.startswith("big-"):
+        return "big"
+    if scale_label.startswith(f"{LARGEST_SCALE_LABEL}-"):
+        return LARGEST_SCALE_LABEL
+    return scale_label
+
+
+def _requires_ferromic_opt_in(scale_label: str) -> bool:
+    return _scale_family(scale_label) == "big"
+
+
+def _scale_skip_reason(scale_label: str) -> str:
+    family = _scale_family(scale_label)
+    if family == "big":
+        return FERROMIC_BIG_REASON
+    if family == LARGEST_SCALE_LABEL:
+        return LARGEST_SCALE_REASON
+    return ""
 
 
 def _block_length_for_average_fst(scale_label: str) -> int:
@@ -236,7 +266,8 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
-    if scale_label != LARGEST_SCALE_LABEL:
+    family = _scale_family(scale_label)
+    if family != LARGEST_SCALE_LABEL:
         return True
 
     value = os.environ.get(LARGEST_SCALE_ENV_VAR, "").strip().lower()
@@ -261,7 +292,7 @@ def _is_library_scale_enabled(library: str, scale_label: str) -> bool:
     if not _is_scale_enabled(scale_label):
         return False
     normalized = _normalize_library_name(library)
-    if normalized == "ferromic" and scale_label == "big":
+    if normalized == "ferromic" and _requires_ferromic_opt_in(scale_label):
         value = os.environ.get(FERROMIC_BIG_ENV_VAR, "").strip().lower()
         if not value:
             return False
@@ -515,11 +546,12 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
 
     configs = {
         "medium": (100, 100, 500),
-        "big": (2000, 5000, 500_000),
-        # Right-size the "LARGEST" dataset to roughly 0.02 GiB of diploid
+        "big": (1_600, 6_250, 500_000),
+        # Right-size the "LARGEST" datasets to roughly 0.02 GiB of diploid
         # genotypes while remaining comfortably above the million-scale
-        # configuration.
-        LARGEST_SCALE_LABEL: (2_048, 5_120, None),
+        # configuration and exploring different aspect ratios.
+        LARGEST_SCALE_LABEL: (1_024, 10_500, None),
+        LARGEST_WIDE_SCALE_LABEL: (768, 14_000, None),
 
 
     }
@@ -528,7 +560,8 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == LARGEST_SCALE_LABEL:
+    family = _scale_family(scale_label)
+    if family == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_WEIR_VARIANTS * BASE_WEIR_SAMPLES
@@ -538,23 +571,36 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         if simulated_total != expected:
             raise AssertionError("Simulated dataset does not match required scale factor")
     else:
-        smaller_scale_total = configs["big"][0] * configs["big"][1]
+        smaller_totals = [
+            configs[label][0] * configs[label][1]
+            for label in configs
+            if _scale_family(label) == "big"
+        ]
+        smaller_scale_total = max(smaller_totals)
         if simulated_total <= smaller_scale_total:
             raise AssertionError("Largest-scale dataset must exceed million-scale size")
 
     ploidy = 2
     subpops = _build_even_subpops(n_samples, n_subpops=2)
 
-    if scale_label == LARGEST_SCALE_LABEL:
+    memmap_label = scale_label.lower().replace("-", "_")
+    if family == LARGEST_SCALE_LABEL:
         g = _load_or_create_memmap(
-            name="weir_genotypes_largest",
+            name=f"weir_genotypes_{memmap_label}",
             shape=(n_variants, n_samples, ploidy),
             dtype=np.int8,
-            initializer=lambda mm: _initialize_weir_large(mm, seed=424242),
+            initializer=lambda mm: _initialize_weir_large(
+                mm,
+                seed=424_242 + sum(ord(ch) for ch in scale_label),
+            ),
         )
         return g, subpops
 
-    rng = np.random.default_rng(42 if scale_label == "medium" else 4242)
+    seeds = {
+        "medium": 42,
+        "big": 4_242,
+    }
+    rng = np.random.default_rng(seeds.get(scale_label, 4242))
     subpop_labels = np.empty(n_samples, dtype=np.int8)
     for label, indices in enumerate(subpops):
         subpop_labels[indices] = label
@@ -587,12 +633,13 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
 
     configs = {
         "medium": (100, None, 500),
-        "big": (5000, None, 500_000),
+        "big": (8_000, None, 500_000),
         # Scale the "LARGEST" haplotype data to roughly 0.015 GiB of haplotype
         # calls (about 0.017 GiB when the synthetic all-missing row is included),
         # providing a stress case far beyond the million-scale scenario without
-        # exhausting CI memory limits.
-        LARGEST_SCALE_LABEL: (2_000, 4_001, None),
+        # exhausting CI memory limits while covering diverse aspect ratios.
+        LARGEST_SCALE_LABEL: (6_000, 1_500, None),
+        LARGEST_WIDE_SCALE_LABEL: (8_000, 1_200, None),
 
 
     }
@@ -601,7 +648,8 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_samples_per_pop, explicit_variants, required_factor = configs[scale_label]
-    if scale_label == LARGEST_SCALE_LABEL:
+    family = _scale_family(scale_label)
+    if family == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_variants = BASE_HAP_VARIANTS + (1 if include_missing_row else 0)
@@ -620,16 +668,17 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         minimum_variants = smaller_required_total // total_samples + 1
         n_variants_total = max(explicit_variants, minimum_variants)
 
-    if scale_label == LARGEST_SCALE_LABEL:
+    memmap_label = scale_label.lower().replace("-", "_")
+    if family == LARGEST_SCALE_LABEL:
         dtype = np.int8
         shape = (n_variants_total, total_samples)
         haplotypes = _load_or_create_memmap(
-            name="haplotypes_largest",
+            name=f"haplotypes_{memmap_label}",
             shape=shape,
             dtype=dtype,
             initializer=lambda mm: _initialize_haplotype_large(
                 mm,
-                seed=123_000,
+                seed=123_000 + sum(ord(ch) for ch in scale_label),
                 n_samples_per_pop=n_samples_per_pop,
                 max_allele=4,
             ),
@@ -640,7 +689,11 @@ def _simulate_haplotype_array(scale_label: str, *, include_missing_row: bool = F
         pos = np.arange(2, 2 + pos_step * n_variants_total, pos_step, dtype=np.int32)
         return haplotypes, pos
 
-    rng = np.random.default_rng(123 if scale_label == "medium" else 123_456)
+    seeds = {
+        "medium": 123,
+        "big": 123_456,
+    }
+    rng = np.random.default_rng(seeds.get(scale_label, 123_456))
     max_allele = 4
     haplotypes = np.empty((n_variants_total, total_samples), dtype=np.int8)
 
@@ -676,10 +729,12 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
 
     configs = {
         "medium": (180, 50, 500),
-        "big": (3000, 3000, 500_000),
+        "big": (1_500, 6_000, 500_000),
         # Expand the "LARGEST" sequence dataset to around 0.02 GiB of diploid
-        # genotypes while remaining comfortably beyond the million-scale baseline.
-        LARGEST_SCALE_LABEL: (2_048, 5_120, None),
+        # genotypes while remaining comfortably beyond the million-scale baseline
+        # and sampling multiple aspect ratios.
+        LARGEST_SCALE_LABEL: (1_024, 10_800, None),
+        LARGEST_WIDE_SCALE_LABEL: (768, 14_400, None),
 
     }
 
@@ -687,7 +742,8 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == LARGEST_SCALE_LABEL:
+    family = _scale_family(scale_label)
+    if family == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_SEQDIVERSITY_VARIANTS * BASE_SEQDIVERSITY_SAMPLES
@@ -699,23 +755,36 @@ def _simulate_sequence_genotypes(scale_label: str) -> tuple[Any, Any]:
                 "Simulated sequence dataset does not match required scale factor"
             )
     else:
-        smaller_scale_total = configs["big"][0] * configs["big"][1]
+        smaller_totals = [
+            configs[label][0] * configs[label][1]
+            for label in configs
+            if _scale_family(label) == "big"
+        ]
+        smaller_scale_total = max(smaller_totals)
         if simulated_total <= smaller_scale_total:
             raise AssertionError("Largest-scale sequence data must exceed million scale")
 
     ploidy = 2
 
-    if scale_label == LARGEST_SCALE_LABEL:
+    memmap_label = scale_label.lower().replace("-", "_")
+    if family == LARGEST_SCALE_LABEL:
         genotype = _load_or_create_memmap(
-            name="sequence_genotypes_largest",
+            name=f"sequence_genotypes_{memmap_label}",
             shape=(n_variants, n_samples, ploidy),
             dtype=np.int8,
-            initializer=lambda mm: _initialize_sequence_large(mm, seed=2025),
+            initializer=lambda mm: _initialize_sequence_large(
+                mm,
+                seed=2_025 + sum(ord(ch) for ch in scale_label),
+            ),
         )
         pos = np.arange(2, 2 + 5 * n_variants, 5, dtype=np.int32)
         return genotype, pos
 
-    rng = np.random.default_rng(2023 if scale_label == "medium" else 2024)
+    seeds = {
+        "medium": 2_023,
+        "big": 2_024,
+    }
+    rng = np.random.default_rng(seeds.get(scale_label, 2_024))
     genotype = np.empty((n_variants, n_samples, ploidy), dtype=np.int8)
 
     allele_lookup = np.array([[0, 0], [0, 1], [1, 1]], dtype=np.int8)
@@ -742,10 +811,12 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
 
     configs = {
         "medium": (60, 100, 500),
-        "big": (2000, 3000, 500_000),
-        # Grow the "LARGEST" PCA matrix to approximately 0.025 GiB of float32 data
-        # while significantly exceeding the million-scale case.
-        LARGEST_SCALE_LABEL: (1_792, 3_584, None),
+        "big": (1_200, 5_000, 500_000),
+        # Grow the "LARGEST" PCA matrices to approximately 0.025 GiB of float32
+        # data while significantly exceeding the million-scale case and sampling
+        # multiple aspect ratios.
+        LARGEST_SCALE_LABEL: (768, 8_640, None),
+        LARGEST_WIDE_SCALE_LABEL: (576, 11_520, None),
 
     }
 
@@ -753,7 +824,8 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
         raise ValueError(f"Unknown scale label: {scale_label}")
 
     n_variants, n_samples, required_factor = configs[scale_label]
-    if scale_label == LARGEST_SCALE_LABEL:
+    family = _scale_family(scale_label)
+    if family == LARGEST_SCALE_LABEL:
         _ensure_scale_enabled(scale_label)
 
     base_total = BASE_PCA_VARIANTS * BASE_PCA_SAMPLES
@@ -763,20 +835,32 @@ def _simulate_pca_matrix(scale_label: str) -> Any:
         if simulated_total != expected:
             raise AssertionError("Simulated PCA dataset does not match required scale factor")
     else:
-        smaller_total = configs["big"][0] * configs["big"][1]
+        smaller_total = max(
+            configs[label][0] * configs[label][1]
+            for label in configs
+            if _scale_family(label) == "big"
+        )
         if simulated_total <= smaller_total:
             raise AssertionError("Largest-scale PCA matrix must exceed million scale")
 
-    if scale_label == LARGEST_SCALE_LABEL:
+    memmap_label = scale_label.lower().replace("-", "_")
+    if family == LARGEST_SCALE_LABEL:
         matrix = _load_or_create_memmap(
-            name="pca_matrix_largest",
+            name=f"pca_matrix_{memmap_label}",
             shape=(n_variants, n_samples),
             dtype=np.float32,
-            initializer=lambda mm: _initialize_pca_large(mm, seed=707),
+            initializer=lambda mm: _initialize_pca_large(
+                mm,
+                seed=707 + sum(ord(ch) for ch in scale_label),
+            ),
         )
         return matrix
 
-    rng = np.random.default_rng(7 if scale_label == "medium" else 77)
+    seeds = {
+        "medium": 7,
+        "big": 77,
+    }
+    rng = np.random.default_rng(seeds.get(scale_label, 77))
     minor_allele_freqs = rng.uniform(0.01, 0.5, size=n_variants)
     matrix = np.empty((n_variants, n_samples), dtype=np.float64)
     for variant_index, maf in enumerate(minor_allele_freqs):
@@ -794,6 +878,20 @@ FERROMIC_PCA_INPUTS: dict[str, dict[str, Any]] = {}
 
 def _build_sample_names(n_samples: int) -> list[str]:
     return [f"sample_{index}" for index in range(n_samples)]
+
+
+def _build_ferromic_diploid_variants(genotypes: Any, positions: Any) -> list[dict[str, Any]]:
+    return [
+        {"position": int(pos), "genotypes": _diploid_variant_genotypes(genotypes[idx])}
+        for idx, pos in enumerate(positions)
+    ]
+
+
+def _build_ferromic_haploid_variants(haplotypes: Any, positions: Any) -> list[dict[str, Any]]:
+    return [
+        {"position": int(pos), "genotypes": _haploid_variant_genotypes(haplotypes[idx])}
+        for idx, pos in enumerate(positions)
+    ]
 
 
 def _diploid_variant_genotypes(genotype_slice: "np.ndarray") -> list[Any]:
@@ -853,11 +951,6 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
         g, subpops = _simulate_weir_genotypes(scale_label)
         positions = np.arange(g.shape[0], dtype=np.int64)
 
-        variants = [
-            {"position": int(pos), "genotypes": _diploid_variant_genotypes(g[idx])}
-            for idx, pos in enumerate(positions)
-        ]
-
         haplotype_lists = [
             [
                 (sample_index, allele_index)
@@ -897,13 +990,15 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             "genotypes": g,
             "subpops": subpops,
             "positions": positions,
-            "variants": variants,
             "sample_names": sample_names,
             "sample_to_group": sample_to_group,
             "sequence_length": sequence_length,
             "populations": populations,
             "region": region,
             "population": population_all,
+            "build_variants": lambda gen=g, pos=positions: _build_ferromic_diploid_variants(
+                gen, pos
+            ),
         }
         FERROMIC_WEIR_INPUTS[scale_label] = payload
 
@@ -926,13 +1021,6 @@ def _ferromic_haplotype_inputs(
         pos_array = np.asarray(pos)
 
         pos_array = pos_array[: hap_array.shape[0]]
-        variants = [
-            {
-                "position": int(position),
-                "genotypes": _haploid_variant_genotypes(hap_array[idx]),
-            }
-            for idx, position in enumerate(pos_array)
-        ]
         sample_count = hap_array.shape[1]
         sample_names = _build_sample_names(sample_count)
         sequence_length = int(pos_array[-1] + 1) if pos_array.size else 0
@@ -949,10 +1037,12 @@ def _ferromic_haplotype_inputs(
         payload = {
             "haplotypes_array": hap_array,
             "positions": pos_array,
-            "variants": variants,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
             "population": population,
+            "build_variants": lambda hap=hap_array, pos=pos_array: _build_ferromic_haploid_variants(
+                hap, pos
+            ),
         }
         FERROMIC_HAPLOTYPE_INPUTS[cache_key] = payload
 
@@ -1051,7 +1141,7 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
                 "ferromic.wc_fst",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["variants"],
+                    ferromic_inputs["build_variants"](),
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1060,7 +1150,7 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.wc_fst",
@@ -1107,7 +1197,7 @@ def _hudson_results_cached(scale_label: str) -> tuple[Any, Any]:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.hudson_fst",
@@ -1146,7 +1236,7 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
                 "ferromic.wc_fst_average",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["variants"],
+                    ferromic_inputs["build_variants"](),
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1155,7 +1245,7 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.wc_fst_average",
@@ -1204,7 +1294,7 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.hudson_fst_average",
@@ -1249,13 +1339,13 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
                 "ferromic.pairwise_differences",
                 scale_label,
                 lambda: ferromic.pairwise_differences(
-                    ferromic_inputs["variants"], sample_count
+                    ferromic_inputs["build_variants"](), sample_count
                 ),
                 details=ferromic_details,
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.pairwise_differences",
@@ -1304,7 +1394,7 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
 
             def _ferromic_pairwise_between() -> float:
                 comparisons = ferromic.pairwise_differences(
-                    ferromic_inputs["variants"], sample_count
+                    ferromic_inputs["build_variants"](), sample_count
                 )
                 diff_total = 0.0
                 comparable_total = 0
@@ -1330,7 +1420,7 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.pairwise_differences_between",
@@ -1395,7 +1485,7 @@ def _sequence_divergence_cached(scale_label: str) -> float:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.hudson_dxy",
@@ -1470,7 +1560,7 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.nucleotide_diversity",
@@ -1523,7 +1613,7 @@ def _pca_results_cached(scale_label: str) -> tuple[Any, Any]:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.chromosome_pca",
@@ -1569,7 +1659,7 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
                 library="ferromic",
             )
         else:
-            reason = FERROMIC_BIG_REASON if scale_label == "big" else LARGEST_SCALE_REASON
+            reason = _scale_skip_reason(scale_label)
             _record_scale_skip(
                 library="ferromic",
                 category="ferromic.chromosome_pca_randomized",
@@ -1681,6 +1771,38 @@ def _print_benchmarks() -> None:
 
 
 atexit.register(_print_benchmarks)
+
+
+def _validate_paired_benchmarks() -> None:
+    required_libraries = {"scikit-allel", "ferromic"}
+    if not required_libraries.issubset(ENABLED_LIBRARIES):
+        return
+
+    scale_labels = set(_enabled_scale_labels())
+    if not scale_labels:
+        return
+
+    executed: dict[str, set[str]] = {}
+    for record in BENCHMARK_RESULTS:
+        if record.skipped or record.size_label not in scale_labels:
+            continue
+        executed.setdefault(record.size_label, set()).add(record.library)
+
+    missing: dict[str, set[str]] = {}
+    for label in scale_labels:
+        libs_present = executed.get(label, set())
+        missing_libs = required_libraries - libs_present
+        if missing_libs:
+            missing[label] = missing_libs
+
+    if missing:
+        details = ", ".join(
+            f"{label} (missing {', '.join(sorted(libs))})"
+            for label, libs in sorted(missing.items())
+        )
+        raise AssertionError(
+            "Missing paired benchmark results for scale labels: " + details
+        )
 
 
 def _skip_if_library_disabled(library: str) -> None:
@@ -2304,11 +2426,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     import pytest  # type: ignore
 
     exit_code = pytest.main(["-s", __file__])
+    _validate_paired_benchmarks()
     _print_benchmarks()
     return exit_code
 
 
 def pytest_sessionfinish(session, exitstatus):  # type: ignore[unused-argument]
+    _validate_paired_benchmarks()
     _print_benchmarks()
 
 
