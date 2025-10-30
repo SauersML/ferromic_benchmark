@@ -997,6 +997,8 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             int(positions[0]) if positions.size else 0,
             int(positions[-1]) if positions.size else 0,
         )
+        variants = _build_ferromic_diploid_variants(g, positions)
+
         payload = {
             "genotypes": g,
             "subpops": subpops,
@@ -1007,9 +1009,7 @@ def _ferromic_weir_inputs(scale_label: str) -> dict[str, Any]:
             "populations": populations,
             "region": region,
             "population": population_all,
-            "build_variants": lambda gen=g, pos=positions: _build_ferromic_diploid_variants(
-                gen, pos
-            ),
+            "variants": variants,
         }
         FERROMIC_WEIR_INPUTS[scale_label] = payload
 
@@ -1045,15 +1045,15 @@ def _ferromic_haplotype_inputs(
             sequence_length,
             sample_names=sample_names,
         )
+        variants = _build_ferromic_haploid_variants(hap_array, pos_array)
+
         payload = {
             "haplotypes_array": hap_array,
             "positions": pos_array,
             "sample_names": sample_names,
             "sequence_length": sequence_length,
             "population": population,
-            "build_variants": lambda hap=hap_array, pos=pos_array: _build_ferromic_haploid_variants(
-                hap, pos
-            ),
+            "variants": variants,
         }
         FERROMIC_HAPLOTYPE_INPUTS[cache_key] = payload
 
@@ -1154,7 +1154,7 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
                 "ferromic.wc_fst",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["build_variants"](),
+                    ferromic_inputs["variants"],
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1253,7 +1253,7 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
                 "ferromic.wc_fst_average",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["build_variants"](),
+                    ferromic_inputs["variants"],
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1360,7 +1360,7 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
                 "ferromic.pairwise_differences",
                 scale_label,
                 lambda: ferromic.pairwise_differences(
-                    ferromic_inputs["build_variants"](), sample_count
+                    ferromic_inputs["variants"], sample_count
                 ),
                 details=ferromic_details,
                 library="ferromic",
@@ -1417,7 +1417,7 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
 
             def _ferromic_pairwise_between() -> float:
                 comparisons = ferromic.pairwise_differences(
-                    ferromic_inputs["build_variants"](), sample_count
+                    ferromic_inputs["variants"], sample_count
                 )
                 diff_total = 0.0
                 comparable_total = 0
