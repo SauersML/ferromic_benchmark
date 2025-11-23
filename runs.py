@@ -120,7 +120,11 @@ def _normalize_library_name(library: str) -> str:
 
 
 def set_enabled_libraries(libraries: Sequence[str] | None) -> None:
-    """Configure which libraries should run during this benchmark session."""
+    """Configure which libraries should run during this benchmark session.
+
+    Ferromic and scikit-allel benchmarks always run together so that every
+    supported scale is exercised by both libraries.
+    """
 
     global ENABLED_LIBRARIES
 
@@ -136,7 +140,7 @@ def set_enabled_libraries(libraries: Sequence[str] | None) -> None:
     if unknown:
         raise ValueError(f"Unknown libraries requested: {', '.join(unknown)}")
 
-    ENABLED_LIBRARIES = normalized
+    ENABLED_LIBRARIES = set(DEFAULT_LIBRARIES)
 
 
 def is_library_enabled(library: str) -> bool:
@@ -190,13 +194,6 @@ LARGE_SCALE_LABELS = (
     LARGEST_SCALE_LABEL,
     LARGEST_WIDE_SCALE_LABEL,
 )
-LARGEST_SCALE_ENV_VAR = "RUN_LARGEST_SCALE"
-LARGEST_SCALE_REASON = (
-    "requires significant CPU/RAM/disk resources; set "
-    f"{LARGEST_SCALE_ENV_VAR}=1 to enable"
-)
-FERROMIC_BIG_ENV_VAR = "RUN_FERROMIC_BIG_SCALE"
-FERROMIC_BIG_REASON = "requires enabling RUN_FERROMIC_BIG_SCALE=1 due to ferromic runtime"
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
 
 
@@ -228,23 +225,7 @@ def _scale_family(scale_label: str) -> str:
     return scale_label
 
 
-def _requires_ferromic_opt_in(scale_label: str) -> bool:
-    return _scale_family(scale_label) == "big"
-
-
-def _is_ferromic_big_scale_enabled() -> bool:
-    value = os.environ.get(FERROMIC_BIG_ENV_VAR, "").strip().lower()
-    if not value:
-        return False
-    return value in {"1", "true", "yes", "on"}
-
-
 def _scale_skip_reason(scale_label: str) -> str:
-    family = _scale_family(scale_label)
-    if family == "big":
-        return FERROMIC_BIG_REASON
-    if family == LARGEST_SCALE_LABEL:
-        return LARGEST_SCALE_REASON
     return ""
 
 
@@ -273,22 +254,12 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
-    family = _scale_family(scale_label)
-    if family != LARGEST_SCALE_LABEL:
-        return True
-
-    value = os.environ.get(LARGEST_SCALE_ENV_VAR, "").strip().lower()
-    if not value:
-        return False
-
-    return value in {"1", "true", "yes", "on"}
+    return True
 
 
 def _ensure_scale_enabled(scale_label: str) -> None:
     if not _is_scale_enabled(scale_label):
-        raise RuntimeError(
-            f"Scale '{scale_label}' is disabled. {LARGEST_SCALE_REASON}."
-        )
+        raise RuntimeError(f"Scale '{scale_label}' is disabled.")
 
 
 def _enabled_scale_labels() -> tuple[str, ...]:
@@ -296,15 +267,7 @@ def _enabled_scale_labels() -> tuple[str, ...]:
 
 
 def _is_library_scale_enabled(library: str, scale_label: str) -> bool:
-    if not _is_scale_enabled(scale_label):
-        return False
-    normalized = _normalize_library_name(library)
-    if _requires_ferromic_opt_in(scale_label):
-        if normalized == "ferromic":
-            return _is_ferromic_big_scale_enabled()
-        if normalized == "scikit-allel" and "ferromic" in ENABLED_LIBRARIES:
-            return _is_ferromic_big_scale_enabled()
-    return True
+    return _is_scale_enabled(scale_label)
 
 
 def _enabled_scale_labels_for_library(library: str) -> tuple[str, ...]:
@@ -2441,12 +2404,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--ferromic",
         action="store_true",
-        help="Run only ferromic benchmarks",
+        help="Request ferromic benchmarks (scikit-allel benchmarks also run)",
     )
     parser.add_argument(
         "--allel",
         action="store_true",
-        help="Run only scikit-allel benchmarks",
+        help="Request scikit-allel benchmarks (ferromic benchmarks also run)",
     )
     return parser.parse_args(argv)
 
