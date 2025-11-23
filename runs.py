@@ -260,7 +260,22 @@ def _block_length_for_average_fst(scale_label: str) -> int:
 def _block_jackknife_mean(values: "np.ndarray", blen: int) -> tuple[float, float, Any, Any]:
     import numpy as np
 
-    data = np.asarray(values, dtype=float)
+    def _extract_numeric(value: Any) -> float:
+        """Attempt to coerce ferromic and array-like FST site values to float."""
+
+        for attr in ("overall_fst", "fst"):
+            if hasattr(value, attr):
+                value = getattr(value, attr)
+
+        if hasattr(value, "value"):
+            value = value.value
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    data = np.asarray([_extract_numeric(v) for v in values], dtype=float)
     overall = float(np.nanmean(data)) if data.size else float("nan")
 
     block_estimates: list[float] = []
@@ -1331,7 +1346,7 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
                 "ferromic.hudson_fst_average",
                 scale_label,
                 lambda: _block_jackknife_mean(
-                    ferromic.hudson_fst_with_sites(populations[0], populations[1], region).site_fst,
+                    ferromic.hudson_fst_with_sites(populations[0], populations[1], region)[1],
                     blen,
                 ),
                 details=ferromic_details,
