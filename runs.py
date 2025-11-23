@@ -194,6 +194,18 @@ LARGE_SCALE_LABELS = (
     LARGEST_SCALE_LABEL,
     LARGEST_WIDE_SCALE_LABEL,
 )
+SCALE_ENV_VARS: dict[str, str] = {
+    "medium": "RUN_MEDIUM_SCALE",
+    "big": "RUN_BIG_SCALE",
+    LARGEST_SCALE_LABEL: "RUN_LARGEST_SCALE",
+    LARGEST_WIDE_SCALE_LABEL: "RUN_LARGEST_WIDE_SCALE",
+}
+SCALE_DEFAULTS: dict[str, bool] = {
+    "medium": True,
+    "big": True,
+    LARGEST_SCALE_LABEL: False,
+    LARGEST_WIDE_SCALE_LABEL: False,
+}
 MEMMAP_ROOT = Path(tempfile.gettempdir()) / "allel_docs_examples_large"
 
 
@@ -226,6 +238,15 @@ def _scale_family(scale_label: str) -> str:
 
 
 def _scale_skip_reason(scale_label: str) -> str:
+    family = _scale_family(scale_label)
+    env_var = SCALE_ENV_VARS.get(family) or SCALE_ENV_VARS.get(scale_label)
+    if env_var:
+        env_value = os.getenv(env_var)
+        default_state = SCALE_DEFAULTS.get(family, True)
+        if env_value is None and not default_state:
+            return f"{env_var} not set; defaulting to disabled"
+        if env_value is not None and env_value.lower() in {"0", "false", ""}:
+            return f"{env_var} set to disable scale"
     return ""
 
 
@@ -234,6 +255,32 @@ def _block_length_for_average_fst(scale_label: str) -> int:
         return AVERAGE_FST_BLOCK_LENGTHS[scale_label]
     except KeyError as exc:  # pragma: no cover - defensive programming
         raise ValueError(f"Unknown scale label for block length: {scale_label}") from exc
+
+
+def _block_jackknife_mean(values: "np.ndarray", blen: int) -> tuple[float, float, Any, Any]:
+    import numpy as np
+
+    data = np.asarray(values, dtype=float)
+    overall = float(np.nanmean(data)) if data.size else float("nan")
+
+    block_estimates: list[float] = []
+    for start in range(0, data.shape[0], blen):
+        end = min(start + blen, data.shape[0])
+        mask = np.ones_like(data, dtype=bool)
+        mask[start:end] = False
+        remainder = data[mask]
+        block_value = float(np.nanmean(remainder)) if remainder.size else float("nan")
+        block_estimates.append(block_value)
+
+    block_array = np.asarray(block_estimates, dtype=float)
+    valid_blocks = block_array[np.isfinite(block_array)]
+    se = float("nan")
+    if valid_blocks.size and np.isfinite(overall):
+        se = float(
+            math.sqrt(((valid_blocks.size - 1) / valid_blocks.size) * np.sum((valid_blocks - overall) ** 2))
+        )
+
+    return overall, se, block_array, block_array
 
 
 def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
@@ -254,6 +301,13 @@ def _build_even_subpops(n_samples: int, n_subpops: int = 2) -> list[list[int]]:
 
 
 def _is_scale_enabled(scale_label: str) -> bool:
+    family = _scale_family(scale_label)
+    env_var = SCALE_ENV_VARS.get(family) or SCALE_ENV_VARS.get(scale_label)
+    env_value = os.getenv(env_var, None)
+    if env_var:
+        if env_value is None:
+            return SCALE_DEFAULTS.get(family, True)
+        return env_value.lower() not in {"0", "false", ""}
     return True
 
 
@@ -529,8 +583,8 @@ def _simulate_weir_genotypes(scale_label: str) -> tuple[Any, list[list[int]]]:
         # Right-size the "LARGEST" datasets to stay comfortably beyond the
         # million-scale configuration while remaining well below the memory
         # limits of resource-constrained CI runners.
-        LARGEST_SCALE_LABEL: (320, 1_000, None),
-        LARGEST_WIDE_SCALE_LABEL: (288, 1_056, None),
+        LARGEST_SCALE_LABEL: (32_000, 1_000, None),
+        LARGEST_WIDE_SCALE_LABEL: (28_800, 1_056, None),
     }
 
     if scale_label not in configs:
@@ -1217,11 +1271,14 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
             benchmark_call(
                 "ferromic.wc_fst_average",
                 scale_label,
-                lambda: ferromic.wc_fst(
-                    variants,
-                    ferromic_inputs["sample_names"],
-                    ferromic_inputs["sample_to_group"],
-                    ferromic_inputs["region"],
+                lambda: _block_jackknife_mean(
+                    ferromic.wc_fst(
+                        variants,
+                        ferromic_inputs["sample_names"],
+                        ferromic_inputs["sample_to_group"],
+                        ferromic_inputs["region"],
+                    ).site_fst,
+                    blen,
                 ),
                 details=ferromic_details,
                 library="ferromic",
@@ -1273,7 +1330,10 @@ def _average_hudson_results_cached(scale_label: str) -> tuple[float, float, Any,
             benchmark_call(
                 "ferromic.hudson_fst_average",
                 scale_label,
-                lambda: ferromic.hudson_fst_with_sites(populations[0], populations[1], region),
+                lambda: _block_jackknife_mean(
+                    ferromic.hudson_fst_with_sites(populations[0], populations[1], region).site_fst,
+                    blen,
+                ),
                 details=ferromic_details,
                 library="ferromic",
             )
@@ -1532,6 +1592,8 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
 
             ferromic_inputs = _ferromic_sequence_inputs(scale_label)
             population = ferromic_inputs["population"]
+            seg_sites = population.segregating_sites()
+            sample_count = len(_ferromic_haplotypes(population))
 
             benchmark_call(
                 "ferromic.nucleotide_diversity",
@@ -1541,17 +1603,12 @@ def _sequence_diversity_cached(scale_label: str) -> tuple[float, float]:
                 library="ferromic",
             )
 
-            def _ferromic_theta() -> float:
-                seg_sites = population.segregating_sites()
-                sample_count = len(_ferromic_haplotypes(population))
-                return ferromic.watterson_theta(
-                    seg_sites, sample_count, population.sequence_length
-                )
-
             benchmark_call(
                 "ferromic.watterson_theta",
                 scale_label,
-                _ferromic_theta,
+                lambda: ferromic.watterson_theta(
+                    seg_sites, sample_count, population.sequence_length
+                ),
                 details=ferromic_details,
                 library="ferromic",
             )
@@ -1644,19 +1701,12 @@ def _randomized_pca_results_cached(scale_label: str) -> tuple[Any, Any]:
     if is_library_enabled("ferromic"):
         ferromic_details = details
         if _is_library_scale_enabled("ferromic", scale_label):
-            import ferromic
-
-            ferromic_inputs = _ferromic_pca_inputs(scale_label)
-            benchmark_call(
-                "ferromic.chromosome_pca_randomized",
-                scale_label,
-                lambda: ferromic.chromosome_pca(
-                    ferromic_inputs["dense_variants"],
-                    ferromic_inputs["sample_names"],
-                    n_components=3,
-                ),
-                details=ferromic_details,
+            _record_scale_skip(
                 library="ferromic",
+                category="ferromic.chromosome_pca_randomized",
+                size_label=scale_label,
+                details=ferromic_details,
+                reason="ferromic does not expose a randomized PCA interface",
             )
         else:
             reason = _scale_skip_reason(scale_label)
