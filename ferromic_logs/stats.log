@@ -1,0 +1,8 @@
+[2025-11-23 20:47:08.548] [INFO] Calculating pairwise differences across 200 samples (19900 pairs)
+[2025-11-23 20:47:08.548] [INFO] Started operation: Processing pairwise differences for 200 samples
+[2025-11-23 20:47:08.558] [INFO] Computed 19900 pairwise comparisons
+[2025-11-23 20:47:08.640] [DEBUG] Watterson's theta: 0.03764019620048373 (from 175 segregating sites, 100 haplotypes, 898 length)
+[2025-11-23 20:47:08.646] [INFO] Calculating pairwise differences across 200 samples (19900 pairs)
+[2025-11-23 20:47:08.646] [INFO] Started operation: Processing pairwise differences for 200 samples
+[2025-11-23 20:47:08.657] [INFO] Computed 19900 pairwise comparisons
+[2025-11-23 20:47:08.680] [DEBUG] Dxy calculation: processed 89 variant sites with valid data

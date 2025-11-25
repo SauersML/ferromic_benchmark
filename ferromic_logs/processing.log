@@ -1,0 +1,58 @@
+[2025-11-23 20:45:49.600] [INFO] Started operation: Calculating FST between haplotype groups for region sample:1..100 (length 100)
+[2025-11-23 20:45:49.600] [INFO] Beginning FST calculation between haplotype groups (e.g., 0 vs 1) for region sample:1..100
+[2025-11-23 20:45:49.602] [INFO] Starting step: Calculating FST at 100 variant sites for haplotype groups
+[2025-11-23 20:45:49.602] [INFO] Overall regional FST: 0.128156
+[2025-11-23 20:45:49.602] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:45:49.602] [INFO] Haplotype group FST calculation complete: 78 sites showed positive, finite FST out of 100 variant sites in the region.
+[2025-11-23 20:45:49.602] [INFO] Overall FST between haplotype groups for the region: 0.128156
+[2025-11-23 20:45:49.602] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:45:49.636] [INFO] Started operation: Calculating FST between haplotype groups for region sample:1..100 (length 100)
+[2025-11-23 20:45:49.636] [INFO] Beginning FST calculation between haplotype groups (e.g., 0 vs 1) for region sample:1..100
+[2025-11-23 20:45:49.637] [INFO] Starting step: Calculating FST at 100 variant sites for haplotype groups
+[2025-11-23 20:45:49.637] [INFO] Overall regional FST: 0.128156
+[2025-11-23 20:45:49.637] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:45:49.637] [INFO] Haplotype group FST calculation complete: 78 sites showed positive, finite FST out of 100 variant sites in the region.
+[2025-11-23 20:45:49.637] [INFO] Overall FST between haplotype groups for the region: 0.128156
+[2025-11-23 20:45:49.637] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:45:50.035] [DEBUG] Watterson's theta: 0.03764019620048373 (from 175 segregating sites, 100 haplotypes, 898 length)
+[2025-11-23 20:45:50.451] [INFO] Started operation: Preparing PCA matrix for 60 dense variants
+[2025-11-23 20:45:50.451] [INFO] Dense PCA input: 60 variants with complete data out of 60
+[2025-11-23 20:45:50.451] [INFO] Displaying status box: Chromosome PCA Data Preparation
+[2025-11-23 20:45:50.451] [INFO] Keeping 54/60 dense variants with MAF >= 5%
+[2025-11-23 20:45:50.451] [INFO] Started operation: Computing PCA
+[2025-11-23 20:45:50.573] [INFO] PCA computation complete: generated 3 components for 200 haplotypes
+[2025-11-23 20:45:51.925] [INFO] Started operation: Preparing PCA matrix for 60 dense variants
+[2025-11-23 20:45:51.926] [INFO] Dense PCA input: 60 variants with complete data out of 60
+[2025-11-23 20:45:51.926] [INFO] Displaying status box: Chromosome PCA Data Preparation
+[2025-11-23 20:45:51.926] [INFO] Keeping 54/60 dense variants with MAF >= 5%
+[2025-11-23 20:45:51.926] [INFO] Started operation: Computing PCA
+[2025-11-23 20:45:51.933] [INFO] PCA computation complete: generated 3 components for 200 haplotypes
+[2025-11-23 20:45:51.975] [DEBUG] Dxy calculation: processed 89 variant sites with valid data
+[2025-11-23 20:47:08.460] [INFO] Started operation: Calculating FST between haplotype groups for region sample:1..100 (length 100)
+[2025-11-23 20:47:08.461] [INFO] Beginning FST calculation between haplotype groups (e.g., 0 vs 1) for region sample:1..100
+[2025-11-23 20:47:08.481] [INFO] Starting step: Calculating FST at 100 variant sites for haplotype groups
+[2025-11-23 20:47:08.482] [INFO] Overall regional FST: 0.128156
+[2025-11-23 20:47:08.482] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:47:08.482] [INFO] Haplotype group FST calculation complete: 78 sites showed positive, finite FST out of 100 variant sites in the region.
+[2025-11-23 20:47:08.482] [INFO] Overall FST between haplotype groups for the region: 0.128156
+[2025-11-23 20:47:08.482] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:47:08.513] [INFO] Started operation: Calculating FST between haplotype groups for region sample:1..100 (length 100)
+[2025-11-23 20:47:08.513] [INFO] Beginning FST calculation between haplotype groups (e.g., 0 vs 1) for region sample:1..100
+[2025-11-23 20:47:08.514] [INFO] Starting step: Calculating FST at 100 variant sites for haplotype groups
+[2025-11-23 20:47:08.514] [INFO] Overall regional FST: 0.128156
+[2025-11-23 20:47:08.514] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:47:08.514] [INFO] Haplotype group FST calculation complete: 78 sites showed positive, finite FST out of 100 variant sites in the region.
+[2025-11-23 20:47:08.514] [INFO] Overall FST between haplotype groups for the region: 0.128156
+[2025-11-23 20:47:08.514] [INFO] Regional pairwise FST for 0_vs_1: 0.128156
+[2025-11-23 20:47:08.687] [INFO] Started operation: Preparing PCA matrix for 60 dense variants
+[2025-11-23 20:47:08.687] [INFO] Dense PCA input: 60 variants with complete data out of 60
+[2025-11-23 20:47:08.687] [INFO] Displaying status box: Chromosome PCA Data Preparation
+[2025-11-23 20:47:08.687] [INFO] Keeping 54/60 dense variants with MAF >= 5%
+[2025-11-23 20:47:08.687] [INFO] Started operation: Computing PCA
+[2025-11-23 20:47:08.769] [INFO] PCA computation complete: generated 3 components for 200 haplotypes
+[2025-11-23 20:47:09.758] [INFO] Started operation: Preparing PCA matrix for 60 dense variants
+[2025-11-23 20:47:09.758] [INFO] Dense PCA input: 60 variants with complete data out of 60
+[2025-11-23 20:47:09.758] [INFO] Displaying status box: Chromosome PCA Data Preparation
+[2025-11-23 20:47:09.758] [INFO] Keeping 54/60 dense variants with MAF >= 5%
+[2025-11-23 20:47:09.758] [INFO] Started operation: Computing PCA
+[2025-11-23 20:47:09.777] [INFO] PCA computation complete: generated 3 components for 200 haplotypes

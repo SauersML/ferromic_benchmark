@@ -1150,11 +1150,12 @@ def _weir_results_cached(scale_label: str) -> tuple[Any, Any, Any]:
             import ferromic
 
             ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            variants = ferromic_inputs["build_variants"]()
             benchmark_call(
                 "ferromic.wc_fst",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["build_variants"](),
+                    variants,
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1249,11 +1250,12 @@ def _average_weir_results_cached(scale_label: str) -> tuple[float, float, Any, A
             import ferromic
 
             ferromic_inputs = _ferromic_weir_inputs(scale_label)
+            variants = ferromic_inputs["build_variants"]()
             benchmark_call(
                 "ferromic.wc_fst_average",
                 scale_label,
                 lambda: ferromic.wc_fst(
-                    ferromic_inputs["build_variants"](),
+                    variants,
                     ferromic_inputs["sample_names"],
                     ferromic_inputs["sample_to_group"],
                     ferromic_inputs["region"],
@@ -1355,12 +1357,13 @@ def _mean_pairwise_difference_cached(scale_label: str) -> Any:
             import ferromic
 
             ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+            variants = ferromic_inputs["build_variants"]()
             sample_count = len(ferromic_inputs["sample_names"])
             benchmark_call(
                 "ferromic.pairwise_differences",
                 scale_label,
                 lambda: ferromic.pairwise_differences(
-                    ferromic_inputs["build_variants"](), sample_count
+                    variants, sample_count, ferromic_inputs["sequence_length"]
                 ),
                 details=ferromic_details,
                 library="ferromic",
@@ -1411,13 +1414,14 @@ def _mean_pairwise_difference_between_cached(scale_label: str) -> Any:
             import ferromic
 
             ferromic_inputs = _ferromic_haplotype_inputs(scale_label)
+            variants = ferromic_inputs["build_variants"]()
             sample_count = len(ferromic_inputs["sample_names"])
             pop1_indices = set(range(0, sample_count // 2))
             pop2_indices = set(range(sample_count // 2, sample_count))
 
             def _ferromic_pairwise_between() -> float:
                 comparisons = ferromic.pairwise_differences(
-                    ferromic_inputs["build_variants"](), sample_count
+                    variants, sample_count, ferromic_inputs["sequence_length"]
                 )
                 diff_total = 0.0
                 comparable_total = 0
